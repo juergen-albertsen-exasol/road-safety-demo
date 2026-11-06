@@ -16,3 +16,4 @@ secrets/*
 .obsidian
 .claude
 temp/
+.venv/

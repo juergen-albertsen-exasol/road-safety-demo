@@ -3,11 +3,12 @@
 
 Sources, licenses and limits: research/road-data-sources.md. The plan: docs/road-safety-demo-plan.md.
 
-    ~/.exasol-starter-kit/pyexasol-venv/bin/python scripts/prepare_road_data.py --out ~/road-data
-    EXAKIT_SCHEMA=ROAD_DATA exakit data-load ~/road-data
+    python3 -m venv .venv && .venv/bin/pip install osmium shapely pyexasol
+    .venv/bin/python scripts/prepare_road_data.py --out ~/road-data
+    scripts/load_road_data.sh road-safety-demo ~/road-data
 
-Needs `osmium` (pyosmium) and `shapely`:
-    ~/.exasol-starter-kit/pyexasol-venv/bin/python -m pip install osmium shapely
+The database is an Exasol Personal deployment (`exasol install local`), loaded with exapump;
+`road-safety-demo` is the exapump profile for it. No starter kit needed.
 
 The study area is the city of Munich (union of the 25 districts from MUNICH_DATASET's
 districts.csv) plus the full motorway ring: the convex hull of the city and the A99,
@@ -27,6 +28,8 @@ Output files (-> table names after load, schema ROAD_DATA):
   motorway_events.csv      MOTORWAY_EVENTS      Autobahn GmbH roadworks, closures and warnings: a snapshot
                                                 taken when the script runs
   road_data_sources.csv    ROAD_DATA_SOURCES    source, license, URL and retrieval time per table
+  districts.csv            DISTRICTS            copied from the Munich dataset (data/munich-dataset), so the
+  roadworks.csv            ROADWORKS            schema is complete on its own
 
 Run with --only to rebuild single parts, e.g. `--only autobahn` right before a talk.
 """
@@ -38,6 +41,7 @@ import io
 import json
 import math
 import re
+import shutil
 import sys
 import time
 import urllib.request
@@ -54,7 +58,7 @@ try:
     from shapely.geometry import LineString, Point
     from shapely.strtree import STRtree
 except ImportError as e:  # pragma: no cover
-    sys.exit(f"error: {e}. Install with: <kit python> -m pip install osmium shapely")
+    sys.exit(f"error: {e}. Install with: .venv/bin/pip install osmium shapely")
 
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
@@ -140,7 +144,7 @@ def list_dir(url: str, pattern: str) -> list[str]:
 def write_csv(path: Path, header: list[str], rows) -> int:
     n = 0
     with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=header, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=header, extrasaction="ignore", lineterminator="\n")
         w.writeheader()
         for r in rows:
             w.writerow({k: ("" if v is None else v) for k, v in r.items()})
@@ -504,6 +508,19 @@ EVENT_HEADER = ["event_id", "road", "service", "display_type", "title", "subtitl
                 "retrieved_at"]
 
 
+def iso_utc(value: str | None) -> str | None:
+    """ISO 8601 with time zone ('2026-10-17T00:00:00+02:00', '...Z') -> 'YYYY-MM-DD HH:MM:SS' in UTC."""
+    if not value:
+        return None
+    try:
+        t = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def autobahn_part(args, out: Path, study, sources):
     rows, seen = [], set()
     shapely.prepare(study)
@@ -529,7 +546,7 @@ def autobahn_part(args, out: Path, study, sources):
                     "event_id": item["identifier"], "road": road, "service": service,
                     "display_type": item.get("display_type"), "title": item.get("title"),
                     "subtitle": (item.get("subtitle") or "").strip(), "is_blocked": int(item.get("isBlocked") == "true"),
-                    "future": int(bool(item.get("future"))), "start_ts": item.get("startTimestamp"),
+                    "future": int(bool(item.get("future"))), "start_ts": iso_utc(item.get("startTimestamp")),
                     "abnormal_traffic_type": item.get("abnormalTrafficType"), "delay_minutes": item.get("delayTimeValue"),
                     "lat": round(lat, 6), "lon": round(lon, 6), "extent_wkt": extent,
                     "description": " / ".join(x for x in item.get("description", []) if x)[:2000],
@@ -571,6 +588,15 @@ def main() -> int:
     drop = {t for p in parts for t in rebuilt[p]}
     sources = [s for s in sources if s["table_name"] not in drop]
 
+    munich = Path(args.districts).expanduser().parent
+    for name, table in (("districts.csv", "DISTRICTS"), ("roadworks.csv", "ROADWORKS")):
+        shutil.copyfile(munich / name, out / name)
+        print(f"  {name:26s} copied from {munich}")
+        sources = [s for s in sources if s["table_name"] != table] + [{
+            "table_name": table, "source": "City of Munich open data portal (via the Munich dataset)",
+            "license": "dl-de/by-2-0", "attribution": "Landeshauptstadt München, dl-de/by-2-0",
+            "url": "https://opendata.muenchen.de", "retrieved_at": NOW}]
+
     seg_lines, study = [], None
     if "osm" in parts:
         seg_lines = osm_part(args, out, cache, districts, city, sources)
@@ -589,7 +615,7 @@ def main() -> int:
 
     write_csv(sources_path, ["table_name", "source", "license", "attribution", "url", "retrieved_at"],
               sorted(sources, key=lambda s: s["table_name"]))
-    print(f"Done. Load with:  EXAKIT_SCHEMA=ROAD_DATA exakit data-load {out}")
+    print(f"Done. Load with:  scripts/load_road_data.sh road-safety-demo {out}")
     return 0
 
 

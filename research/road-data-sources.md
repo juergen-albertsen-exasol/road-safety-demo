@@ -9,8 +9,8 @@ The vehicle and sensor stream is synthetic (schema `ROAD_SAFETY`). Everything be
 | Layer | Source | License | How current | Verified |
 |---|---|---|---|---|
 | Road network, forests and parks | OpenStreetMap, Geofabrik extract Oberbayern | ODbL 1.0 | Daily; checked file contains OSM data up to 2026-11-04 | Download page and state file |
-| City boundary, districts | `MUNICH_DATASET.DISTRICTS` | dl-de/by-2.0 | Current boundaries | Already loaded |
-| City roadworks | `MUNICH_DATASET.ROADWORKS` (Munich open data, Baustellen) | dl-de/by-2.0 | Snapshot of the dataset build, 5,702 rows | Already loaded |
+| City boundary, districts | `DISTRICTS` from the Munich dataset, copied into `ROAD_DATA` | dl-de/by-2.0 | Current boundaries | Loaded |
+| City roadworks | `ROADWORKS` from the Munich dataset (Munich open data, Baustellen), copied into `ROAD_DATA` | dl-de/by-2.0 | Snapshot of the dataset build, 5,702 rows | Loaded |
 | Motorway roadworks, closures, warnings | Autobahn GmbH, offer "Die Autobahn App" on Mobilithek; JSON endpoint `verkehr.autobahn.de` | GeoNutzV (per the Mobilithek offer) | Live | Endpoint called for the A9 |
 | Weather | DWD Climate Data Center, station 3379 München-Stadt (and 1262 München-Flughafen) | CC BY 4.0 | 10-minute values, historical up to 2025-12-31, "recent" up to yesterday | Files downloaded and read |
 | Accident history | Unfallatlas of the Statistical Offices of the Federation and the Länder | dl-de/by-2.0 | Yearly, 2016–2025 for Bavaria | 2025 file downloaded and read |
@@ -21,10 +21,10 @@ The vehicle and sensor stream is synthetic (schema `ROAD_SAFETY`). Everything be
 - **License:** Open Database License 1.0. Attribution "© OpenStreetMap contributors". Derived databases that are shared must stay under ODbL.
 - **How current:** updated daily. The checked file contains OSM data up to 2026-11-04 21:21 UTC.
 - **What we take:** all `highway=*` ways for cars (motorway to residential, plus link roads) with `oneway`, `maxspeed`, `bridge`, `tunnel`, `name`, `ref`, split into segments. Clipped to the city boundary (union of `DISTRICTS`) **plus the full motorway ring** A8, A9, A92, A94, A95, A96, A99 with a buffer of about 2 km. Also `landuse=forest`, `natural=wood` and `leisure=park` edges (Forstenrieder Park, Perlacher Forst, Aubinger Lohe …) as the wildlife risk layer, and the Isar bridges (`bridge=yes` crossing `waterway=river` Isar) as the area for the slippery road scenario.
-- **Tools:** neither `osmium` nor GDAL is installed. `prepare_road_data.py` should use `pyosmium` (pip, in the kit venv) and `shapely`.
+- **Tools:** neither `osmium` nor GDAL is installed. `prepare_road_data.py` uses `pyosmium` and `shapely` from the project `.venv`.
 - **What it can't tell us:** traffic volumes, the condition of the road surface, or where sensors really are. The sensor positions in the demo are virtual, placed at real OSM features.
 
-## City roadworks: already in `MUNICH_DATASET.ROADWORKS`
+## City roadworks: `ROADWORKS` from the Munich dataset
 
 - Munich open data portal, Baustellen, dl-de/by-2.0. 5,702 current and planned roadworks with dates, impact and centroid. Details are in [data/README.md](../data/README.md).
 - **Limit:** a snapshot from when the dataset was built, not a live feed. It shows today's roadworks, not those of the simulated weather day (2025-01-10). The dashboard should say so.
