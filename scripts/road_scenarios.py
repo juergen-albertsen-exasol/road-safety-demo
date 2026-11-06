@@ -36,7 +36,7 @@ SCENARIOS = {
     },
     "oil_spill": {
         "label": "temporary slippery road (oil spill)", "default_area": "a9-freimann",
-        "injects": "on about 300 m, vehicles get ESC/ABS interventions and slow down; the outside temperature stays "
+        "injects": "on about 500 m, vehicles get ESC/ABS interventions and slow down; the outside temperature stays "
                    "normal, so it is not ice; nothing else changes",
         "areas": "a9-freimann (A9 into the city)",
     },
@@ -163,7 +163,7 @@ def resolve(kind: str, area: str | None, graph, c=None) -> Area:
         if start is None:
             raise ValueError("no A9 segment found at Freimann")
         segs, cur, length = {start.sid}, start, start.length
-        while length < 300:                          # about 300 m in the direction of travel
+        while length < 500:                          # about 500 m in the direction of travel
             nxt = [sid for sid, fwd in graph.exits.get(cur.to_node, ()) if fwd and graph[sid].ref == "A 9"
                    and graph[sid].road_class == "motorway"]
             if not nxt:

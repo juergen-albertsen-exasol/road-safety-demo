@@ -265,7 +265,9 @@ def setup(args) -> None:
     rng = random.Random(args.seed)
     segs, _ = load_graph(c)
     ids = list(segs)
-    weights = [segs[i].length * CLASS_WEIGHT.get(segs[i].road_class, 0.5) for i in ids]
+    capw = {int(r["segment_id"]): float(r["capacity_vph"]) / 1000
+            for r in c.execute('SELECT "segment_id", "capacity_vph" FROM ROAD_DATA.SEGMENT_TRAFFIC')}
+    weights = [segs[i].length * CLASS_WEIGHT.get(segs[i].road_class, 0.5) * capw.get(i, 0.5) for i in ids]
     fleet = [p for p in PROVIDERS if p[5]]
     vehicles = []
     for vid in range(1, args.vehicles + 1):
@@ -346,7 +348,10 @@ class Sim:
         self.graph, self.exits = load_graph(c)
         self.segs = self.graph
         self.ids = list(self.segs)
-        self.weights = [self.segs[i].length * CLASS_WEIGHT.get(self.segs[i].road_class, 0.5) for i in self.ids]
+        # probes follow the traffic: road class x capacity (lanes), so busy roads carry more probe vehicles
+        self.capw = {int(r["segment_id"]): float(r["capacity_vph"]) / 1000
+                     for r in c.execute('SELECT "segment_id", "capacity_vph" FROM ROAD_DATA.SEGMENT_TRAFFIC')}
+        self.weights = [self.segs[i].length * self.route_weight(i) for i in self.ids]
         prov = {r["provider_id"]: r for r in c.execute("SELECT * FROM ROAD_SAFETY.DATA_PROVIDERS")}
         self.dyn = {k: bool(v["shares_vehicle_dynamics"]) for k, v in prov.items()}
         self.env = {k: bool(v["shares_environment"]) for k, v in prov.items()}
@@ -383,6 +388,9 @@ class Sim:
     @property
     def now(self) -> datetime:
         return self.t0 + timedelta(seconds=self.t)
+
+    def route_weight(self, sid: int) -> float:
+        return CLASS_WEIGHT.get(self.segs[sid].road_class, 0.5) * self.capw.get(sid, 0.5)
 
     def set_target(self, v: Vehicle, w: dict | None = None) -> None:
         s = self.segs[v.seg]
@@ -435,7 +443,7 @@ class Sim:
         wts = []
         for sid, _ in cands:
             n = self.segs[sid]
-            wt = CLASS_WEIGHT.get(n.road_class, 0.5)
+            wt = self.route_weight(sid)
             if (s.name and n.name == s.name) or (s.ref and n.ref == s.ref):
                 wt *= 4                              # keep following the same road
             wts.append(wt)
@@ -778,7 +786,7 @@ def main() -> int:
     ap.add_argument("--deployment", default="road-safety-demo", help="Exasol Personal deployment name")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("setup", help="create ROAD_SAFETY with providers, vehicles and sensors")
-    p.add_argument("--vehicles", type=int, default=4000)
+    p.add_argument("--vehicles", type=int, default=6000)
     p.add_argument("--seed", type=int, default=42)
     p = sub.add_parser("run", help="run the background stream")
     p.add_argument("--speed", type=float, default=1.0, help="simulation seconds per wall second")
