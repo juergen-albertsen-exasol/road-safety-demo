@@ -13,11 +13,21 @@ on are real open data in ROAD_DATA (scripts/prepare_road_data.py). Plan: docs/ro
 `run` options: --speed (simulation seconds per wall second, default 1), --seed, --weather-day
 (default 2025-01-10), --start (local time, default 06:30), --tick (wall seconds per batch, default 2).
 
-Background traffic only for now: vehicles drive along the OSM segments, report every 10 s of
-simulation time, and produce some isolated noise on purpose (single hard brakings, single ESC
-interventions, hazard lights) so the detection rule has something to filter out. Weather follows the
-real DWD 10-minute values of the weather day at station 3379 Muenchen-Stadt. Scenario triggers come
-in a later step: they will write SCENARIO_LOG and change the signals, never the hazards.
+Vehicles drive along the OSM segments, report every 10 s of simulation time, and produce some
+isolated noise on purpose (single hard brakings, single ESC interventions, hazard lights) so the
+detection rule has something to filter out. Weather follows the real DWD 10-minute values of the
+weather day at station 3379 Muenchen-Stadt.
+
+Scenarios are injected on purpose and visibly, while `run` is running:
+
+    .venv/bin/python scripts/simulate_road_safety.py scenarios                       # what can be triggered
+    .venv/bin/python scripts/simulate_road_safety.py trigger slippery_road --area isar-bridges
+    .venv/bin/python scripts/simulate_road_safety.py trigger slippery_road --stop
+    .venv/bin/python scripts/simulate_road_safety.py stop-all
+
+A trigger writes one row into SCENARIO_LOG and prints a SIMULATION banner. The running simulator
+picks it up within one tick and changes the signals of the vehicles and sensors in the area. It never
+writes a hazard: whether one appears is decided by the detection SQL (roadsafety/hazards.sql).
 
 Connects as `sys` to the Exasol Personal deployment (--deployment, default road-safety-demo); the
 password is read from the deployment's secrets.json and never printed. Writes only to ROAD_SAFETY.
@@ -41,6 +51,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pyexasol
+
+import road_scenarios as rs
 
 ROOT = Path(__file__).resolve().parent.parent
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -67,7 +79,8 @@ DEFAULT_KMH = {"motorway": 130, "motorway_link": 80, "trunk": 80, "trunk_link": 
                "residential": 30}
 
 # Background noise, events per vehicle and hour of simulation time.
-NOISE_PER_HOUR = {"hard_braking": 0.5, "esc": 0.05, "abs": 0.03, "hazard_lights": 0.05}
+NOISE_PER_HOUR = {"hard_braking": 0.3, "esc": 0.05, "abs": 0.03, "hazard_lights": 0.05}
+NOISE_MIN_SPEED = 5.0          # m/s: no ESC/ABS or hard braking noise while crawling in a jam
 FREEZING_ESC_FACTOR = 3.0      # ESC/ABS a bit more often when the outside temperature is <= 1 C
 REPORT_EVERY_S = 10
 SENSOR_EVERY_S = 60
@@ -122,6 +135,16 @@ class Segment:
     coords: list            # [(lon, lat), ...] from -> to
     cum: list               # cumulative metres along coords
     length: float
+    crosses_isar: bool = False
+    bridge_name: str = ""
+    mid: tuple = (0.0, 0.0)  # lon, lat
+    heading: float = 0.0     # degrees, from -> to
+
+
+class Graph(dict):
+    """segment id -> Segment, plus node indexes: exits[node] = [(sid, forward)], into[node] = [sid]."""
+    exits: dict
+    into: dict
 
 
 def parse_linestring(wkt: str) -> list[tuple[float, float]]:
@@ -134,9 +157,10 @@ KY = 110540.0
 
 
 def load_graph(c):
-    segs: dict[int, Segment] = {}
+    segs = Graph()
     for r in c.execute('SELECT "segment_id", "from_node", "to_node", "oneway", "road_class", "name", "ref", '
-                       '"maxspeed_kmh", "is_tunnel", "geometry_wkt" FROM ROAD_DATA.ROAD_SEGMENTS'):
+                       '"maxspeed_kmh", "is_tunnel", "geometry_wkt", "crosses_isar", "bridge_name", "mid_lon", "mid_lat", '
+                       '"heading_deg" FROM ROAD_DATA.ROAD_SEGMENTS'):
         coords = parse_linestring(r["geometry_wkt"])
         cum = [0.0]
         for (x1, y1), (x2, y2) in zip(coords, coords[1:]):
@@ -145,7 +169,9 @@ def load_graph(c):
         kmh = float(r["maxspeed_kmh"]) if r["maxspeed_kmh"] is not None else DEFAULT_KMH.get(rc, 50)
         sid = int(r["segment_id"])
         segs[sid] = Segment(sid, int(r["from_node"]), int(r["to_node"]), int(r["oneway"]), rc,
-                            r["name"] or "", r["ref"] or "", kmh, bool(r["is_tunnel"]), coords, cum, max(cum[-1], 1.0))
+                            r["name"] or "", r["ref"] or "", kmh, bool(r["is_tunnel"]), coords, cum, max(cum[-1], 1.0),
+                            bool(r["crosses_isar"]), r["bridge_name"] or "", (r["mid_lon"], r["mid_lat"]),
+                            float(r["heading_deg"] or 0))
     # node -> segments you can enter from it, with direction (True = from -> to)
     exits: dict[int, list[tuple[int, bool]]] = defaultdict(list)
     for s in segs.values():
@@ -153,6 +179,10 @@ def load_graph(c):
             exits[s.from_node].append((s.sid, True))
         if s.oneway in (0, -1):
             exits[s.to_node].append((s.sid, False))
+    into: dict[int, list[int]] = defaultdict(list)
+    for s in segs.values():
+        into[s.to_node].append(s.sid)
+    segs.exits, segs.into = exits, into
     return segs, exits
 
 
@@ -298,14 +328,21 @@ class Vehicle:
     driver: float = 1.0
     temp_bias: float = 0.0
     next_report: float = 0.0
-    events: dict = field(default_factory=dict)
+    special: int = 0            # scenario id that took the vehicle over (crash, wrong-way driver)
+    frozen: bool = False        # stands still (crashed)
+    wrong: bool = False         # drives against the one-way direction
+    airbag: bool = False        # deployed: reported in every signal
+    hazard_on: bool = False     # hazard lights stay on
+    cool_until: float = 0.0     # no new scenario event before this simulation second
+    lonlat: tuple = (0.0, 0.0)
 
 
 class Sim:
     def __init__(self, c, args):
         self.c, self.args = c, args
         self.rng = random.Random(args.seed)
-        self.segs, self.exits = load_graph(c)
+        self.graph, self.exits = load_graph(c)
+        self.segs = self.graph
         self.ids = list(self.segs)
         self.weights = [self.segs[i].length * CLASS_WEIGHT.get(self.segs[i].road_class, 0.5) for i in self.ids]
         prov = {r["provider_id"]: r for r in c.execute("SELECT * FROM ROAD_SAFETY.DATA_PROVIDERS")}
@@ -331,6 +368,8 @@ class Sim:
         self.t = 0.0                    # simulation seconds since t0
         self.next_sensor = 0.0
         self.run_id = int(c.execute('SELECT COALESCE(MAX("run_id"), 0) + 1 FROM ROAD_SAFETY.SIM_STATE').fetchval())
+        self.running: dict[int, rs.Running] = {}
+        self.seg_fx: dict[int, dict] = {}
 
     @property
     def now(self) -> datetime:
@@ -339,6 +378,9 @@ class Sim:
     def set_target(self, v: Vehicle, w: dict | None = None) -> None:
         s = self.segs[v.seg]
         kmh = s.kmh
+        if v.wrong:
+            v.target = 100 / 3.6
+            return
         if s.road_class in ("motorway", "trunk"):
             kmh *= self.rng.uniform(0.85, 1.1)
             if v.vtype in ("truck", "bus"):
@@ -351,16 +393,29 @@ class Sim:
             kmh *= 0.95
         v.target = max(kmh * v.driver / 3.6, 2.0)
 
+    def respawn(self, v: Vehicle) -> None:
+        seg = self.segs[self.rng.choices(self.ids, self.weights)[0]]
+        v.seg, v.fwd, v.pos = seg.sid, seg.oneway != -1, 0.0
+        self.set_target(v)
+
     def next_segment(self, v: Vehicle) -> None:
         s = self.segs[v.seg]
+        if v.wrong:                                  # keep going backwards along the motorway
+            cands = [sid for sid in self.graph.into.get(s.from_node, ())
+                     if self.segs[sid].road_class == "motorway" and self.segs[sid].oneway == 1]
+            if not cands:
+                v.pos, v.speed, v.target = s.length, 0.0, 0.0     # end of the network: stops
+                return
+            same = [sid for sid in cands if self.segs[sid].ref == s.ref]
+            v.seg, v.fwd, v.pos = (same or cands)[0], False, 0.0
+            return
         node = s.to_node if v.fwd else s.from_node
         cands = [(sid, fwd) for sid, fwd in self.exits.get(node, ()) if sid != v.seg]
         if not cands:
             if s.oneway == 0:                        # dead end: turn around
                 v.fwd, v.pos = not v.fwd, 0.0
                 return
-            seg = self.segs[self.rng.choices(self.ids, self.weights)[0]]   # left the network: respawn
-            v.seg, v.fwd, v.pos = seg.sid, seg.oneway != -1, 0.0
+            self.respawn(v)                          # left the network
             return
         wts = []
         for sid, _ in cands:
@@ -372,6 +427,31 @@ class Sim:
         v.seg, v.fwd = self.rng.choices(cands, wts)[0]
         v.pos = 0.0
 
+    # ---- scenarios
+    def refresh_scenarios(self) -> None:
+        rows = list(self.c.execute('SELECT "scenario_id", "scenario_type", "area", "started_at", "ended_at" '
+                                   'FROM ROAD_SAFETY.SCENARIO_LOG WHERE "run_id" = {run!d}', {"run": self.run_id}))
+        for r in rows:
+            sid = int(r["scenario_id"])
+            if r["ended_at"] is None and sid not in self.running:
+                try:
+                    self.running[sid] = rs.Running(r, self)
+                    print(f"  >> SIMULATION scenario {sid} active: {r['scenario_type']} on "
+                          f"{self.running[sid].area.description}", flush=True)
+                except ValueError as e:
+                    print(f"  !! scenario {sid} ignored: {e}", flush=True)
+            elif r["ended_at"] is not None and sid in self.running:
+                self.running.pop(sid).stop(self)
+                print(f"  >> SIMULATION scenario {sid} ended: {r['scenario_type']}", flush=True)
+        per_seg: dict[int, list] = defaultdict(list)
+        for run_ in self.running.values():
+            for seg, fx in run_.effects(self).items():
+                per_seg[seg].append(fx)
+            if run_.kind == "storm":
+                self.c.execute('UPDATE ROAD_SAFETY.SCENARIO_LOG SET "area_wkt" = {w} WHERE "scenario_id" = {id!d}',
+                               {"w": run_.area.wkt, "id": run_.id})
+        self.seg_fx = {seg: rs.merge(fxs) for seg, fxs in per_seg.items()}
+
     def step(self, dt: float, w: dict, out: list) -> None:
         temp = w["air_temp_c"]
         freezing = temp is not None and temp <= 1
@@ -381,47 +461,74 @@ class Sim:
             p["abs"] *= FREEZING_ESC_FACTOR
         self.t += dt
         for v in self.vehicles:
-            dv = v.target - v.speed
-            v.speed += max(min(dv, 2.0 * dt), -3.0 * dt)
-            v.pos += v.speed * dt
-            seg = self.segs[v.seg]
-            while v.pos >= seg.length:
-                v.pos -= seg.length
-                self.next_segment(v)
-                self.set_target(v, w)
+            fx = self.seg_fx.get(v.seg)
+            if v.frozen:
+                v.speed = 0.0
+            else:
+                target = v.target * (fx["speed"] if fx and "speed" in fx and not v.wrong else 1.0)
+                dv = target - v.speed
+                v.speed += max(min(dv, 2.0 * dt), -3.0 * dt)
+                v.pos += v.speed * dt
                 seg = self.segs[v.seg]
-            event = None
-            r = self.rng.random()
-            if r < p["hard_braking"]:
-                event = "hard_braking"
-                v.speed *= 0.5
-            elif self.dyn[v.provider] and r < p["hard_braking"] + p["esc"]:
-                event = "esc"
-            elif self.dyn[v.provider] and r < p["hard_braking"] + p["esc"] + p["abs"]:
-                event = "abs"
-            elif r < p["hard_braking"] + p["esc"] + p["abs"] + p["hazard_lights"]:
-                event = "hazard_lights"
-            if event or self.t >= v.next_report:
-                if not event:
+                while v.pos >= seg.length and v.speed > 0:
+                    v.pos -= seg.length
+                    self.next_segment(v)
+                    self.set_target(v, w)
+                    seg = self.segs[v.seg]
+                    fx = self.seg_fx.get(v.seg)
+            if v.special:
+                v.lonlat = point_at(self.segs[v.seg], v.fwd, v.pos)[:2]
+            events: set[str] = set()
+            if fx and not v.special and self.t >= v.cool_until:      # scenario effects
+                r = self.rng.random()
+                if r < fx.get("p_slip", 0) * dt:
+                    if self.dyn[v.provider]:
+                        events.add("esc" if self.rng.random() < 0.6 else "abs")
+                    v.speed *= 0.85
+                elif r < (fx.get("p_slip", 0) + fx.get("p_brake", 0)) * dt:
+                    events.add("hard_braking")
+                    v.speed *= 0.5
+                    if self.rng.random() < 0.3:
+                        events.add("hazard_lights")
+                elif r < (fx.get("p_slip", 0) + fx.get("p_brake", 0) + fx.get("p_hazard", 0)) * dt:
+                    events.add("hazard_lights")
+                if events:
+                    v.cool_until = self.t + 60
+            if not events and not v.special:                            # background noise
+                r = self.rng.random()
+                moving = v.speed > NOISE_MIN_SPEED
+                if moving and r < p["hard_braking"]:
+                    events.add("hard_braking")
+                    v.speed *= 0.5
+                elif moving and self.dyn[v.provider] and r < p["hard_braking"] + p["esc"]:
+                    events.add("esc")
+                elif moving and self.dyn[v.provider] and r < p["hard_braking"] + p["esc"] + p["abs"]:
+                    events.add("abs")
+                elif r < p["hard_braking"] + p["esc"] + p["abs"] + p["hazard_lights"]:
+                    events.add("hazard_lights")
+            if events or self.t >= v.next_report:
+                if self.t >= v.next_report:
                     v.next_report += REPORT_EVERY_S
-                out.append(self.signal(v, w, event))
+                out.append(self.signal(v, w, events, fx))
 
-    def signal(self, v: Vehicle, w: dict, event: str | None) -> tuple:
+    def signal(self, v: Vehicle, w: dict, events: set, fx: dict | None) -> tuple:
         seg = self.segs[v.seg]
         lon, lat, hdg = point_at(seg, v.fwd, v.pos)
         dyn, env = self.dyn[v.provider], self.env[v.provider]
-        temp = None
-        wiper = fog = None
+        fx = fx or {}
+        temp = wiper = fog = None
         if env:
-            base = w["air_temp_c"] if w["air_temp_c"] is not None else 5.0
+            base = fx.get("temp", w["air_temp_c"] if w["air_temp_c"] is not None else 5.0)
             temp = round(base + v.temp_bias + (3.0 if seg.is_tunnel else 0.0) + self.rng.gauss(0, 0.2), 1)
             mm = w["precip_mm"] or 0.0
             wiper = 0 if mm == 0 or seg.is_tunnel else 1 if mm < 0.2 else 2 if mm < 1.0 else 3
-            fog = w["visibility_m"] < 200 and self.rng.random() < 0.9
+            if "wiper" in fx and not seg.is_tunnel:
+                wiper = max(wiper, fx["wiper"])
+            fog = (w["visibility_m"] < 200 or fx.get("fog", False)) and self.rng.random() < 0.9
         return (self.run_id, self.now, v.vid, v.provider, round(lat, 6), round(lon, 6), seg.sid, round(hdg),
-                round(v.speed * 3.6), (event == "esc") if dyn else None, (event == "abs") if dyn else None,
-                event == "hard_braking", event == "hazard_lights", fog, wiper, temp,
-                False if dyn else None, wall_now())
+                round(v.speed * 3.6), ("esc" in events) if dyn else None, ("abs" in events) if dyn else None,
+                "hard_braking" in events, "hazard_lights" in events or v.hazard_on, fog, wiper, temp,
+                v.airbag if dyn else None, wall_now())
 
     def readings(self, w: dict) -> list[tuple]:
         on_seg = defaultdict(list)
@@ -429,20 +536,31 @@ class Sim:
             on_seg[v.seg].append(v.speed * 3.6)
         rows = []
         wet = w["precip_last_hour_mm"] > 0
+        wrong_way = [r for r in self.running.values() if r.kind == "wrong_way_driver"]
         for s in self.sensors:
             sid = int(s["segment_id"])
+            fx = self.seg_fx.get(sid, {})
             speeds = on_seg.get(sid, [])
             count, avg = len(speeds), (round(sum(speeds) / len(speeds)) if speeds else None)
             if s["sensor_type"] == "road_weather":
                 base = w["temp_5cm_c"] if w["temp_5cm_c"] is not None else (w["air_temp_c"] or 5.0)
                 surface = round(base - 0.7 + self.rng.gauss(0, 0.2), 1)      # bridge decks run colder
-                friction = round(min(max((0.6 if wet else 0.8) + self.rng.gauss(0, 0.02), 0), 1), 2)
-                rows.append((self.run_id, self.now, s["sensor_id"], surface, friction,
-                             round(min(w["visibility_m"], 2000)), None, None, None, None, wall_now()))
+                if "surface_max" in fx:
+                    surface = min(surface, fx["surface_max"] + round(self.rng.gauss(0, 0.2), 1))
+                friction = (0.6 if wet else 0.8) + self.rng.gauss(0, 0.02)
+                if "friction" in fx:
+                    friction = self.rng.uniform(*fx["friction"])
+                visibility = min(w["visibility_m"], 2000)
+                if "visibility" in fx:
+                    visibility = self.rng.uniform(*fx["visibility"])
+                rows.append((self.run_id, self.now, s["sensor_id"], surface, round(min(max(friction, 0), 1), 2),
+                             round(visibility), None, None, None, None, wall_now()))
             else:
                 cam = s["sensor_type"] == "camera"
+                alarm = cam and s["location_kind"] == "motorway_entry" and \
+                    any(r.camera_alarm((s["lon"], s["lat"])) for r in wrong_way)
                 rows.append((self.run_id, self.now, s["sensor_id"], None, None, None,
-                             False if cam else None, False if cam else None, count, avg, wall_now()))
+                             alarm if cam else None, bool(fx.get("stationary")) if cam else None, count, avg, wall_now()))
         return rows
 
     def state(self, status: str, first: bool = False) -> None:
@@ -458,6 +576,7 @@ class Sim:
 def run(args) -> None:
     c = connect(args.deployment)
     c.execute("UPDATE ROAD_SAFETY.SIM_STATE SET \"status\" = 'stopped' WHERE \"status\" = 'running'")
+    c.execute('UPDATE ROAD_SAFETY.SCENARIO_LOG SET "ended_at" = "started_at" WHERE "ended_at" IS NULL')
     print("Loading road network, vehicles, sensors and weather ...")
     sim = Sim(c, args)
     sim.state("running", first=True)
@@ -469,6 +588,7 @@ def run(args) -> None:
     try:
         while not stop["flag"]:
             t_wall = time.monotonic()
+            sim.refresh_scenarios()
             sim_dt = args.tick * args.speed
             out: list[tuple] = []
             steps = max(1, math.ceil(sim_dt))
@@ -485,8 +605,9 @@ def run(args) -> None:
             sim.state("running")
             total += len(out)
             if args.verbose or int(sim.t) % 60 < sim_dt:
+                active = ", ".join(f"{r.kind}" for r in sim.running.values()) or "none"
                 print(f"  {sim.now:%H:%M:%S}  {len(out):5d} signals this tick, {total:,} total, "
-                      f"air {w['air_temp_c']} C, 5 cm {w['temp_5cm_c']} C", flush=True)
+                      f"air {w['air_temp_c']} C, 5 cm {w['temp_5cm_c']} C, scenarios: {active}", flush=True)
             if args.duration and sim.t >= args.duration:
                 break
             time.sleep(max(0.0, args.tick - (time.monotonic() - t_wall)))
@@ -497,8 +618,76 @@ def run(args) -> None:
         print(f"Stopped at {sim.now:%H:%M:%S}, {total:,} signals written")
 
 
-HAZARD_DEFAULTS = {"window_min": 30, "min_vehicles": 3, "min_providers": 2, "friction_max": 0.4,
-                   "blockage_after_s": 600}
+# --------------------------------------------------------------------------- triggers
+def current_run(c) -> dict:
+    row = c.execute("SELECT * FROM ROAD_SAFETY.SIM_STATE WHERE \"status\" = 'running' ORDER BY \"run_id\" DESC LIMIT 1").fetchone()
+    if not row:
+        sys.exit("error: no simulator is running. Start it first: simulate_road_safety.py run")
+    return row
+
+
+def banner(lines: list[str]) -> None:
+    bar = "=" * 78
+    print(bar)
+    for ln in lines:
+        print(ln)
+    print(bar, flush=True)
+
+
+def trigger(args) -> None:
+    c = connect(args.deployment)
+    run_ = current_run(c)
+    info = rs.SCENARIOS[args.scenario]
+    sim_now = run_["sim_now"]
+    if args.stop:
+        rows = list(c.execute('SELECT "scenario_id", "area" FROM ROAD_SAFETY.SCENARIO_LOG WHERE "run_id" = {r!d} '
+                              'AND "scenario_type" = {t} AND "ended_at" IS NULL', {"r": run_["run_id"], "t": args.scenario}))
+        if not rows:
+            sys.exit(f"no active {args.scenario} scenario")
+        c.execute('UPDATE ROAD_SAFETY.SCENARIO_LOG SET "ended_at" = {now} WHERE "run_id" = {r!d} AND "scenario_type" = {t} '
+                  'AND "ended_at" IS NULL', {"now": lit(sim_now)[1:-1], "r": run_["run_id"], "t": args.scenario})
+        banner([f'SIMULATION: stopped "{info["label"]}" (scenario {", ".join(str(r["scenario_id"]) for r in rows)}), '
+                f'{sim_now:%H:%M:%S}',
+                "  The vehicles and sensors behave normally again. Hazards expire when no new signals confirm them."])
+        return
+    graph, _ = load_graph(c)
+    try:
+        area = rs.resolve(args.scenario, args.area, graph, c)
+    except ValueError as e:
+        sys.exit(f"error: {e}. Areas for {args.scenario}: {info['areas']}")
+    if c.execute('SELECT COUNT(*) FROM ROAD_SAFETY.SCENARIO_LOG WHERE "run_id" = {r!d} AND "scenario_type" = {t} '
+                 'AND "area" = {a} AND "ended_at" IS NULL',
+                 {"r": run_["run_id"], "t": args.scenario, "a": area.name}).fetchval():
+        sys.exit(f"{args.scenario} on {area.description} is already running")
+    sid = int(c.execute('SELECT COALESCE(MAX("scenario_id"), 0) + 1 FROM ROAD_SAFETY.SCENARIO_LOG').fetchval())
+    insert(c, "SCENARIO_LOG", [(sid, run_["run_id"], args.scenario, area.name, area.wkt, sim_now, None, wall_now(),
+                                args.by, info["injects"])])
+    banner([f'SIMULATION: injecting "{info["label"]}" on {area.description}, {sim_now:%H:%M:%S}',
+            f"  scenario {sid} in run {run_['run_id']} (simulation time {sim_now:%Y-%m-%d %H:%M:%S}), "
+            f"{len(area.segs)} road segments" if area.segs else f"  scenario {sid} in run {run_['run_id']}",
+            f"  injects: {info['injects']}",
+            "  writes synthetic signals into ROAD_SAFETY only. No hazard is written: detection is up to the SQL.",
+            f"  stop it with: simulate_road_safety.py trigger {args.scenario} --stop"])
+
+
+def stop_all(args) -> None:
+    c = connect(args.deployment)
+    run_ = current_run(c)
+    n = c.execute('SELECT COUNT(*) FROM ROAD_SAFETY.SCENARIO_LOG WHERE "ended_at" IS NULL').fetchval()
+    c.execute('UPDATE ROAD_SAFETY.SCENARIO_LOG SET "ended_at" = {now} WHERE "ended_at" IS NULL',
+              {"now": lit(run_["sim_now"])[1:-1]})
+    banner([f"SIMULATION: stopped all scenarios ({n}), {run_['sim_now']:%H:%M:%S}",
+            "  The vehicles and sensors behave normally again. Hazards expire when no new signals confirm them."])
+
+
+def scenarios(args) -> None:
+    for k, v in rs.SCENARIOS.items():
+        print(f"{k:18s} {v['label']}\n{'':18s} areas: {v['areas']} (default {v['default_area']})\n"
+              f"{'':18s} injects: {v['injects']}\n")
+
+
+HAZARD_DEFAULTS = {"window_min": 15, "min_vehicles": 3, "min_providers": 2, "friction_max": 0.4,
+                   "blockage_after_s": 600, "clear_vehicles": 5}
 REACH_DEFAULTS = {"reach_m": 2000, "toward_deg": 60}
 
 
@@ -551,10 +740,18 @@ def main() -> int:
     p.add_argument("--verbose", action="store_true")
     sub.add_parser("views", help="create V_HAZARDS_LIVE and V_HAZARD_REACH from roadsafety/*.sql")
     sub.add_parser("status", help="show the current run and row counts")
+    p = sub.add_parser("trigger", help="inject a scenario into the running simulation (visibly)")
+    p.add_argument("scenario", choices=list(rs.SCENARIOS))
+    p.add_argument("--area", help="where; see `scenarios`")
+    p.add_argument("--stop", action="store_true", help="end the active scenario of this type")
+    p.add_argument("--by", default="presenter", help="who triggered it (written to SCENARIO_LOG)")
+    sub.add_parser("stop-all", help="end all active scenarios")
+    sub.add_parser("scenarios", help="list the scenarios that can be triggered")
     p = sub.add_parser("reset", help="empty the stream tables")
     p.add_argument("--yes", action="store_true")
     args = ap.parse_args()
-    {"setup": setup, "run": run, "views": views, "status": status, "reset": reset}[args.cmd](args)
+    {"setup": setup, "run": run, "views": views, "status": status, "reset": reset,
+     "trigger": trigger, "stop-all": stop_all, "scenarios": scenarios}[args.cmd](args)
     return 0
 
 
