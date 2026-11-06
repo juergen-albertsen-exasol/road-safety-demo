@@ -35,3 +35,9 @@ No source found for: Leuchtenbergring, Luise-Kiesselbach-Platz, Effnerplatz, Teg
 | INRIX, TomTom | Corridor rankings, city figures | proprietary | Evidence for where congestion forms, not data to load |
 
 None of these gives open, ready-to-load hourly data for Munich city streets. Recommendation: the rush-hour curve from BASt hourly values (stations on the A99, A9, A8, A96 near Munich, Tue-Thu outside holidays), relative volume per road from BAYSIS SVZ 2021 where it covers the road and from the road class elsewhere, and the hotspots above as the places where capacity runs out.
+
+## How the hotspots enter the simulation
+
+`data/source/traffic_hotspots.csv` places each hotspot on the OSM road network (point, radius, road names or numbers, direction) and gives it a `demand_factor`: the peak-hour load on those segments is multiplied by it, so they reach capacity first. The factors are **estimates**, calibrated so that each hotspot congests in the morning peak (load above 1.0) and the rest of the network stays below. The load itself comes from data: for motorways, the BASt count stations near Munich (weekday traffic per lane times the peak-hour share, median per motorway); for city roads, the road class. The rush-hour curve is the BASt hourly profile of 2024, Tuesday to Thursday working days, separately for traffic into Munich, out of Munich and on the A99 ring.
+
+The BAYSIS traffic census WFS (`BAYSIS_Verkehrsmengen`) answered with a redirect to the BAYSIS homepage on 2026-11-06, so the road volumes don't use it.

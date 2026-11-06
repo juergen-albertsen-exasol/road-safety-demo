@@ -29,10 +29,16 @@ SCENARIOS = {
         "areas": "isar-bridges, or one bridge by name (e.g. reichenbachbruecke)",
     },
     "accident": {
-        "label": "accident", "default_area": "landshuter-allee",
-        "injects": "2 vehicles stop with airbag deployed and hazard lights on; traffic behind them brakes "
-                   "hard, switches on hazard lights and crawls",
-        "areas": "landshuter-allee (Mittlerer Ring), or a street name",
+        "label": "accident", "default_area": "a99-nord",
+        "injects": "2 vehicles stop with airbag deployed and hazard lights on; the accident closes 2 of 3 lanes, so a "
+                   "queue builds behind it; traffic arriving at the queue brakes hard and switches on hazard lights",
+        "areas": "a99-nord (A99 at Kreuz München-Nord), landshuter-allee (Mittlerer Ring), or a street name",
+    },
+    "oil_spill": {
+        "label": "temporary slippery road (oil spill)", "default_area": "a9-freimann",
+        "injects": "on about 300 m, vehicles get ESC/ABS interventions and slow down; the outside temperature stays "
+                   "normal, so it is not ice; nothing else changes",
+        "areas": "a9-freimann (A9 into the city)",
     },
     "wrong_way_driver": {
         "label": "wrong-way driver", "default_area": "a9-freimann",
@@ -67,6 +73,8 @@ SCENARIOS = {
 STORM_SECONDS = 1200
 FOG_BOX = (11.45, 48.19, 11.75, 48.26)     # lon_min, lat_min, lon_max, lat_max
 FREIMANN = (11.6125, 48.2040)
+A99_NORD = (11.6500, 48.2170)       # A99 east of Kreuz München-Nord, toward Aschheim
+A9_OIL = (11.6120, 48.1950)         # A9 into the city at Freimann
 A96_SPOT = (11.4700, 48.1240)
 
 
@@ -124,12 +132,19 @@ def resolve(kind: str, area: str | None, graph, c=None) -> Area:
         desc = f"{len(names)} Isar bridges" if len(names) > 1 else f"the {names.pop()}"
         return Area(area, desc, segs, outline(segs, graph))
     if kind == "accident":
-        street = "landshuterallee" if a == "landshuterallee" else a
-        cands = [s for s in graph.values() if norm(s.name) == street and s.oneway == 1 and not s.is_tunnel
-                 and s.road_class in ("trunk", "primary", "secondary") and s.length >= 80]
-        if not cands:
-            raise ValueError(f"no one-way main road segment named '{area}'")
-        crash = max(cands, key=lambda s: (s.length, -s.sid))
+        if a == "a99nord":
+            crash = nearest(graph, A99_NORD, lambda s: s.road_class == "motorway" and s.oneway == 1 and s.ref == "A 99"
+                            and 60 <= s.heading <= 160 and s.length >= 80)
+            if crash is None:
+                raise ValueError("no A99 segment found east of Kreuz München-Nord")
+            label = "the A99 at Kreuz München-Nord (toward Aschheim)"
+        else:
+            cands = [s for s in graph.values() if norm(s.name) == a and s.oneway == 1 and not s.is_tunnel
+                     and s.road_class in ("trunk", "primary") and s.length >= 80]
+            if not cands:
+                raise ValueError(f"no one-way main road segment named '{area}'")
+            crash = max(cands, key=lambda s: (s.length, -s.sid))
+            label = f"{crash.name} (Mittlerer Ring)" if a == "landshuterallee" else crash.name
         upstream, frontier = set(), {crash.from_node}
         for _ in range(3):                         # up to 3 segments back, along the same road
             nxt = set()
@@ -141,8 +156,22 @@ def resolve(kind: str, area: str | None, graph, c=None) -> Area:
                         nxt.add(s.from_node)
             frontier = nxt
         segs = {crash.sid} | upstream
-        return Area(area, f"{crash.name} (Mittlerer Ring)" if street == "landshuterallee" else crash.name,
-                    segs, outline({crash.sid}, graph), crash.mid, crash.sid, {"upstream": upstream})
+        return Area(area, label, segs, outline({crash.sid}, graph), crash.mid, crash.sid, {"upstream": upstream})
+    if kind == "oil_spill":
+        start = nearest(graph, A9_OIL, lambda s: s.road_class == "motorway" and s.oneway == 1 and s.ref == "A 9"
+                        and 150 <= s.heading <= 250)
+        if start is None:
+            raise ValueError("no A9 segment found at Freimann")
+        segs, cur, length = {start.sid}, start, start.length
+        while length < 300:                          # about 300 m in the direction of travel
+            nxt = [sid for sid, fwd in graph.exits.get(cur.to_node, ()) if fwd and graph[sid].ref == "A 9"
+                   and graph[sid].road_class == "motorway"]
+            if not nxt:
+                break
+            cur = graph[nxt[0]]
+            segs.add(cur.sid)
+            length += cur.length
+        return Area(area, "the A9 into the city at Freimann", segs, outline(segs, graph), start.mid, start.sid)
     if kind == "wrong_way_driver":
         start = nearest(graph, FREIMANN, lambda s: s.road_class == "motorway" and s.oneway == 1 and s.ref == "A 9")
         if start is None:
@@ -239,9 +268,19 @@ class Running:
             fx = {"speed": 0.7, "p_slip": 0.1, "temp": -1.0, "friction": (0.15, 0.3), "surface_max": -1.0}
             return {s: fx for s in self.area.segs}
         if k == "accident":
-            out = {s: {"speed": 0.35, "p_brake": 0.05, "p_hazard": 0.04} for s in self.area.extra["upstream"]}
-            out[self.area.start_seg] = {"speed": 0.15, "p_brake": 0.08, "p_hazard": 0.06, "stationary": True}
+            crash = self.area.start_seg
+            # the queue behind the accident (from the traffic model): arriving traffic brakes, some hazard lights
+            out = {}
+            for key, bottleneck in sim.traffic.queued.items():
+                if bottleneck[0] == crash:
+                    out[key[0]] = {"p_brake": 0.004, "p_hazard": 0.006}
+            for s in self.area.extra["upstream"]:
+                out[s] = {"p_brake": 0.05, "p_hazard": 0.04}
+            out[crash] = {"speed": 0.5, "p_brake": 0.08, "p_hazard": 0.06, "stationary": True, "capacity": 0.33}
             return out
+        if k == "oil_spill":
+            fx = {"speed": 0.85, "p_slip": 0.15, "capacity": 0.85}
+            return {s: fx for s in self.area.segs}
         if k == "wrong_way_driver":
             out = {}
             for v in self.special:

@@ -11,7 +11,7 @@ on are real open data in ROAD_DATA (scripts/prepare_road_data.py). Plan: docs/ro
     .venv/bin/python scripts/simulate_road_safety.py reset --yes      # empty the stream tables
 
 `run` options: --speed (simulation seconds per wall second, default 1), --seed, --weather-day
-(default 2025-01-10), --start (local time, default 06:30), --tick (wall seconds per batch, default 2).
+(default 2026-10-27), --start (local time, default 06:00), --tick (wall seconds per batch, default 2).
 
 Vehicles drive along the OSM segments, report every 10 s of simulation time, and produce some
 isolated noise on purpose (single hard brakings, single ESC interventions, hazard lights) so the
@@ -53,6 +53,7 @@ from zoneinfo import ZoneInfo
 import pyexasol
 
 import road_scenarios as rs
+import road_traffic as rt
 
 ROOT = Path(__file__).resolve().parent.parent
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -72,8 +73,8 @@ VEHICLE_TYPES = [("car", 85), ("van", 8), ("truck", 5), ("bus", 2)]
 
 CLASS_WEIGHT = {  # how strongly traffic is drawn to a road class
     "motorway": 8, "motorway_link": 2, "trunk": 6, "trunk_link": 2, "primary": 5, "primary_link": 1.5,
-    "secondary": 3.5, "secondary_link": 1, "tertiary": 2, "tertiary_link": 1, "unclassified": 0.8,
-    "residential": 0.5, "living_street": 0.1,
+    "secondary": 3.5, "secondary_link": 1, "tertiary": 2, "tertiary_link": 1, "unclassified": 0.3,
+    "residential": 0.1, "living_street": 0.02,
 }
 DEFAULT_KMH = {"motorway": 130, "motorway_link": 80, "trunk": 80, "trunk_link": 60, "living_street": 7,
                "residential": 30}
@@ -82,7 +83,8 @@ DEFAULT_KMH = {"motorway": 130, "motorway_link": 80, "trunk": 80, "trunk_link": 
 NOISE_PER_HOUR = {"hard_braking": 0.3, "esc": 0.05, "abs": 0.03, "hazard_lights": 0.05}
 NOISE_MIN_SPEED = 5.0          # m/s: no ESC/ABS or hard braking noise while crawling in a jam
 FREEZING_ESC_FACTOR = 3.0      # ESC/ABS a bit more often when the outside temperature is <= 1 C
-REPORT_EVERY_S = 10
+REPORT_EVERY_S = 15
+TRAFFIC_EVERY_S = 10
 SENSOR_EVERY_S = 60
 
 
@@ -370,6 +372,13 @@ class Sim:
         self.run_id = int(c.execute('SELECT COALESCE(MAX("run_id"), 0) + 1 FROM ROAD_SAFETY.SIM_STATE').fetchval())
         self.running: dict[int, rs.Running] = {}
         self.seg_fx: dict[int, dict] = {}
+        self.speed = float(args.speed)
+        self.traffic = rt.TrafficModel(c, self.graph)
+        self.traffic.update(self.t0, 0.0, {})
+        self.traffic_t = 0.0
+        for v in self.vehicles:
+            self.set_target(v)
+            v.speed = v.target
 
     @property
     def now(self) -> datetime:
@@ -380,6 +389,12 @@ class Sim:
         kmh = s.kmh
         if v.wrong:
             v.target = 100 / 3.6
+            return
+        traffic = getattr(self, "traffic", None)
+        main = traffic.kmh(v.seg, v.fwd) if traffic else None
+        if main is not None:                         # main road: the speed the traffic allows
+            limit = {"truck": 85, "bus": 80, "van": 120}.get(v.vtype, 999)
+            v.target = max(min(main * v.driver, limit) / 3.6, 0.5)
             return
         if s.road_class in ("motorway", "trunk"):
             kmh *= self.rng.uniform(0.85, 1.1)
@@ -460,6 +475,13 @@ class Sim:
             p["esc"] *= FREEZING_ESC_FACTOR
             p["abs"] *= FREEZING_ESC_FACTOR
         self.t += dt
+        if self.t - self.traffic_t >= TRAFFIC_EVERY_S:
+            caps = {seg: fx["capacity"] for seg, fx in self.seg_fx.items() if "capacity" in fx}
+            self.traffic.update(self.now, self.t - self.traffic_t, caps)
+            self.traffic_t = self.t
+            for v in self.vehicles:
+                if not v.special:
+                    self.set_target(v, w)
         for v in self.vehicles:
             fx = self.seg_fx.get(v.seg)
             if v.frozen:
@@ -582,6 +604,8 @@ def run(args) -> None:
     sim.state("running", first=True)
     print(f"SIMULATION run {sim.run_id}: {len(sim.vehicles):,} synthetic vehicles, {len(sim.sensors)} virtual sensors, "
           f"weather of {args.weather_day} (DWD {STATION}), starting {sim.now:%Y-%m-%d %H:%M}, speed x{args.speed:g}")
+    print("  The vehicles are probe vehicles: the connected share of the traffic. Load, queues and speeds come from "
+          "the traffic model (BASt rush-hour curve, hotspots, real roadworks).")
     stop = {"flag": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.update(flag=True))
     total = 0
@@ -589,7 +613,9 @@ def run(args) -> None:
         while not stop["flag"]:
             t_wall = time.monotonic()
             sim.refresh_scenarios()
-            sim_dt = args.tick * args.speed
+            sim.speed = float(c.execute('SELECT "speed" FROM ROAD_SAFETY.SIM_STATE WHERE "run_id" = {r!d}',
+                                        {"r": sim.run_id}).fetchval() or sim.speed)
+            sim_dt = args.tick * sim.speed
             out: list[tuple] = []
             steps = max(1, math.ceil(sim_dt))
             for _ in range(steps):
@@ -606,8 +632,8 @@ def run(args) -> None:
             total += len(out)
             if args.verbose or int(sim.t) % 60 < sim_dt:
                 active = ", ".join(f"{r.kind}" for r in sim.running.values()) or "none"
-                print(f"  {sim.now:%H:%M:%S}  {len(out):5d} signals this tick, {total:,} total, "
-                      f"air {w['air_temp_c']} C, 5 cm {w['temp_5cm_c']} C, scenarios: {active}", flush=True)
+                print(f"  {sim.now:%H:%M:%S}  x{sim.speed:g}  {len(out):5d} signals this tick, {total:,} total, "
+                      f"air {w['air_temp_c']} C, traffic: {sim.traffic.summary()}, scenarios: {active}", flush=True)
             if args.duration and sim.t >= args.duration:
                 break
             time.sleep(max(0.0, args.tick - (time.monotonic() - t_wall)))
@@ -670,6 +696,14 @@ def trigger(args) -> None:
             f"  stop it with: simulate_road_safety.py trigger {args.scenario} --stop"])
 
 
+def set_speed(args) -> None:
+    c = connect(args.deployment)
+    run_ = current_run(c)
+    c.execute('UPDATE ROAD_SAFETY.SIM_STATE SET "speed" = {s!f} WHERE "run_id" = {r!d}', {"s": args.factor, "r": run_["run_id"]})
+    print(f"SIMULATION speed: x{args.factor:g} from {run_['sim_now']:%H:%M:%S} "
+          f"({args.factor:g} simulated seconds per real second)")
+
+
 def stop_all(args) -> None:
     c = connect(args.deployment)
     run_ = current_run(c)
@@ -728,13 +762,13 @@ def main() -> int:
     ap.add_argument("--deployment", default="road-safety-demo", help="Exasol Personal deployment name")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("setup", help="create ROAD_SAFETY with providers, vehicles and sensors")
-    p.add_argument("--vehicles", type=int, default=3000)
+    p.add_argument("--vehicles", type=int, default=4000)
     p.add_argument("--seed", type=int, default=42)
     p = sub.add_parser("run", help="run the background stream")
     p.add_argument("--speed", type=float, default=1.0, help="simulation seconds per wall second")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--weather-day", default="2025-01-10")
-    p.add_argument("--start", default="06:30", help="local start time of the simulation")
+    p.add_argument("--weather-day", default="2026-10-27", help="the simulated day: DWD weather and roadworks of it")
+    p.add_argument("--start", default="06:00", help="local start time of the simulation")
     p.add_argument("--tick", type=float, default=2.0, help="wall seconds per batch")
     p.add_argument("--duration", type=float, default=0, help="stop after this many simulation seconds")
     p.add_argument("--verbose", action="store_true")
@@ -746,12 +780,14 @@ def main() -> int:
     p.add_argument("--stop", action="store_true", help="end the active scenario of this type")
     p.add_argument("--by", default="presenter", help="who triggered it (written to SCENARIO_LOG)")
     sub.add_parser("stop-all", help="end all active scenarios")
+    p = sub.add_parser("speed", help="change the simulation speed while it runs")
+    p.add_argument("factor", type=float, help="simulated seconds per real second, e.g. 20 for the build-up, 1 for incidents")
     sub.add_parser("scenarios", help="list the scenarios that can be triggered")
     p = sub.add_parser("reset", help="empty the stream tables")
     p.add_argument("--yes", action="store_true")
     args = ap.parse_args()
     {"setup": setup, "run": run, "views": views, "status": status, "reset": reset,
-     "trigger": trigger, "stop-all": stop_all, "scenarios": scenarios}[args.cmd](args)
+     "trigger": trigger, "stop-all": stop_all, "scenarios": scenarios, "speed": set_speed}[args.cmd](args)
     return 0
 
 

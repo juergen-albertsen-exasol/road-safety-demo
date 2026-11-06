@@ -682,7 +682,7 @@ def traffic_part(args, out: Path, sources, ref_vc: dict) -> None:
         for i in tree.query(zone, predicate="intersects"):
             if lines[int(i)].intersection(zone).length < 30:  # a side street that only touches the site
                 continue
-            f = 0.35 if closed else 0.6
+            f = 0.7 if closed else 0.85
             label = f"City roadworks {r['street']}: {r['impact'] or r['kind']}".strip()
             if works.get(int(i), (1.0,))[0] > f:
                 works[int(i)] = (f, label[:200], "City of Munich")
@@ -694,8 +694,8 @@ def traffic_part(args, out: Path, sources, ref_vc: dict) -> None:
             s = segs[int(i)]
             if s["road_class"] != "motorway" or abs(((float(s["heading_deg"]) - _bearing(geom)) + 180) % 360 - 180) > 60:
                 continue
-            if works.get(int(i), (1.0,))[0] > 0.67:
-                works[int(i)] = (0.67, f"Motorway roadworks {r['title']}"[:200], "Autobahn GmbH")
+            if works.get(int(i), (1.0,))[0] > 0.75:
+                works[int(i)] = (0.75, f"Motorway roadworks {r['title']}"[:200], "Autobahn GmbH")
     rows = []
     cx, cy = CENTRE
     for i, r in enumerate(segs):
