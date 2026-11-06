@@ -12,7 +12,8 @@ The database is an Exasol Personal deployment (`exasol install local`), loaded w
 
 The study area is the city of Munich (union of the 25 districts from MUNICH_DATASET's
 districts.csv) plus the full motorway ring: the convex hull of the city and the A99,
-buffered by 2 km. Inside the city every road for cars is kept; outside it only motorways.
+buffered by 2 km. Inside the city every road for cars is kept; outside it the main roads (motorways to
+tertiary roads), so that diversions around the motorway ring exist.
 
 Output files (-> table names after load, schema ROAD_DATA):
   road_segments.csv        ROAD_SEGMENTS        OSM roads split at junctions and every ~300 m: class, one-way,
@@ -86,6 +87,9 @@ CITY_CLASSES = {
     "residential", "living_street",
 }
 MOTORWAY_CLASSES = {"motorway", "motorway_link"}
+# outside the city, the study area keeps the main roads too, so diversions around the A99 exist
+OUTSIDE_CLASSES = MOTORWAY_CLASSES | {"trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link",
+                                     "tertiary", "tertiary_link"}
 DEFAULT_SPEED = {"motorway": None, "motorway_link": 80, "trunk": 100, "trunk_link": 60,
                  "living_street": 7}
 SEGMENT_MAX_M = 300.0
@@ -285,7 +289,7 @@ def split_ways(ways, city, study):
     shapely.prepare(study)
     in_city = shapely.contains_xy(city, mids[:, 0], mids[:, 1])
     in_study = shapely.contains_xy(study, mids[:, 0], mids[:, 1])
-    keep = [i for i, (_, hw, _, _, _) in enumerate(raw) if in_city[i] or (hw in MOTORWAY_CLASSES and in_study[i])]
+    keep = [i for i, (_, hw, _, _, _) in enumerate(raw) if in_city[i] or (hw in OUTSIDE_CLASSES and in_study[i])]
     return [raw[i] for i in keep], mids[keep], in_city[keep]
 
 

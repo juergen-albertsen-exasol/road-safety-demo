@@ -633,7 +633,7 @@ def run(args) -> None:
             if args.verbose or int(sim.t) % 60 < sim_dt:
                 active = ", ".join(f"{r.kind}" for r in sim.running.values()) or "none"
                 print(f"  {sim.now:%H:%M:%S}  x{sim.speed:g}  {len(out):5d} signals this tick, {total:,} total, "
-                      f"air {w['air_temp_c']} C, traffic: {sim.traffic.summary()}, scenarios: {active}", flush=True)
+                      f"air {w['air_temp_c']:.1f} C, traffic: {sim.traffic.summary()}, scenarios: {active}", flush=True)
             if args.duration and sim.t >= args.duration:
                 break
             time.sleep(max(0.0, args.tick - (time.monotonic() - t_wall)))
@@ -723,6 +723,8 @@ def scenarios(args) -> None:
 HAZARD_DEFAULTS = {"window_min": 15, "min_vehicles": 3, "min_providers": 2, "friction_max": 0.4,
                    "blockage_after_s": 600, "clear_vehicles": 5}
 REACH_DEFAULTS = {"reach_m": 2000, "toward_deg": 60}
+TRAFFIC_DEFAULTS = {"now_min": 5, "before_min": 10, "slow": 0.7, "congested": 0.4, "standstill": 0.15}
+CONGESTION_DEFAULTS = {"merge_m": 1500}
 
 
 def render(c, name: str, **params) -> str:
@@ -736,8 +738,22 @@ def views(args) -> None:
     c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_HAZARDS_LIVE AS\n{hazards}")
     reach = render(c, "reach", hazards_sql="SELECT * FROM ROAD_SAFETY.V_HAZARDS_LIVE", **REACH_DEFAULTS)
     c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_HAZARD_REACH AS\n{reach}")
-    print("Views ROAD_SAFETY.V_HAZARDS_LIVE and V_HAZARD_REACH created with the default thresholds:")
-    print("  " + ", ".join(f"{k}={v}" for k, v in {**HAZARD_DEFAULTS, **REACH_DEFAULTS}.items()))
+    traffic = render(c, "traffic", **TRAFFIC_DEFAULTS)
+    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_TRAFFIC_STATE AS\n{traffic}")
+    congestion = render(c, "congestion", traffic_sql="SELECT * FROM ROAD_SAFETY.V_TRAFFIC_STATE", **CONGESTION_DEFAULTS)
+    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_CONGESTION AS\n{congestion}")
+    warnings = render(c, "warnings", traffic_sql="SELECT * FROM ROAD_SAFETY.V_TRAFFIC_STATE")
+    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_CONGESTION_WARNINGS AS\n{warnings}")
+    udf = (ROOT / "roadsafety" / "diversions_udf.sql").read_text()
+    c.execute(udf[udf.index("CREATE OR REPLACE"):].rstrip().rstrip("/").rstrip())
+    diversions = render(c, "diversions", traffic_sql="SELECT * FROM ROAD_SAFETY.V_TRAFFIC_STATE")
+    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_DIVERSIONS AS\n{diversions}")
+    c.execute("GRANT EXECUTE ON SCHEMA ROAD_SAFETY TO dash_readonly")
+    print("UDF ROAD_SAFETY.DIVERSIONS and view V_DIVERSIONS created (EXECUTE granted to dash_readonly)")
+    print("Views ROAD_SAFETY.V_HAZARDS_LIVE, V_HAZARD_REACH, V_TRAFFIC_STATE, V_CONGESTION, V_CONGESTION_WARNINGS, V_DIVERSIONS "
+          "created with the default thresholds:")
+    print("  " + ", ".join(f"{k}={v}" for k, v in {**HAZARD_DEFAULTS, **REACH_DEFAULTS, **TRAFFIC_DEFAULTS,
+                                                   **CONGESTION_DEFAULTS}.items()))
 
 
 def status(args) -> None:
