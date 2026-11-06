@@ -6,6 +6,7 @@ on are real open data in ROAD_DATA (scripts/prepare_road_data.py). Plan: docs/ro
 
     .venv/bin/python scripts/simulate_road_safety.py setup            # schema, providers, vehicles, sensors
     .venv/bin/python scripts/simulate_road_safety.py run              # background stream, Ctrl-C to stop
+    .venv/bin/python scripts/simulate_road_safety.py views            # detection views from roadsafety/*.sql
     .venv/bin/python scripts/simulate_road_safety.py status
     .venv/bin/python scripts/simulate_road_safety.py reset --yes      # empty the stream tables
 
@@ -496,6 +497,26 @@ def run(args) -> None:
         print(f"Stopped at {sim.now:%H:%M:%S}, {total:,} signals written")
 
 
+HAZARD_DEFAULTS = {"window_min": 30, "min_vehicles": 3, "min_providers": 2, "friction_max": 0.4,
+                   "blockage_after_s": 600}
+REACH_DEFAULTS = {"reach_m": 2000, "toward_deg": 60}
+
+
+def render(c, name: str, **params) -> str:
+    """Fill a roadsafety/*.sql template with pyexasol placeholders."""
+    return c.format.format((ROOT / "roadsafety" / f"{name}.sql").read_text(), **params).strip().rstrip(";")
+
+
+def views(args) -> None:
+    c = connect(args.deployment)
+    hazards = render(c, "hazards", **HAZARD_DEFAULTS)
+    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_HAZARDS_LIVE AS\n{hazards}")
+    reach = render(c, "reach", hazards_sql="SELECT * FROM ROAD_SAFETY.V_HAZARDS_LIVE", **REACH_DEFAULTS)
+    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_HAZARD_REACH AS\n{reach}")
+    print("Views ROAD_SAFETY.V_HAZARDS_LIVE and V_HAZARD_REACH created with the default thresholds:")
+    print("  " + ", ".join(f"{k}={v}" for k, v in {**HAZARD_DEFAULTS, **REACH_DEFAULTS}.items()))
+
+
 def status(args) -> None:
     c = connect(args.deployment)
     for r in c.execute('SELECT * FROM ROAD_SAFETY.SIM_STATE ORDER BY "run_id" DESC LIMIT 3'):
@@ -528,11 +549,12 @@ def main() -> int:
     p.add_argument("--tick", type=float, default=2.0, help="wall seconds per batch")
     p.add_argument("--duration", type=float, default=0, help="stop after this many simulation seconds")
     p.add_argument("--verbose", action="store_true")
+    sub.add_parser("views", help="create V_HAZARDS_LIVE and V_HAZARD_REACH from roadsafety/*.sql")
     sub.add_parser("status", help="show the current run and row counts")
     p = sub.add_parser("reset", help="empty the stream tables")
     p.add_argument("--yes", action="store_true")
     args = ap.parse_args()
-    {"setup": setup, "run": run, "status": status, "reset": reset}[args.cmd](args)
+    {"setup": setup, "run": run, "views": views, "status": status, "reset": reset}[args.cmd](args)
     return 0
 
 
