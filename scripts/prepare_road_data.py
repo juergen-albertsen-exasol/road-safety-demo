@@ -27,6 +27,12 @@ Output files (-> table names after load, schema ROAD_DATA):
   weather_visibility.csv   WEATHER_VISIBILITY   DWD hourly visibility
   motorway_events.csv      MOTORWAY_EVENTS      Autobahn GmbH roadworks, closures and warnings: a snapshot
                                                 taken when the script runs
+  traffic_profile.csv      TRAFFIC_PROFILE      share of the daily traffic per hour, inbound/outbound/ring (BASt,
+                                                Tue-Thu working days)
+  bast_stations.csv        BAST_STATIONS        the BASt count stations used, with weekday traffic and peak load
+  traffic_hotspots.csv     TRAFFIC_HOTSPOTS     known congestion hotspots (data/source/traffic_hotspots.csv)
+  segment_traffic.csv      SEGMENT_TRAFFIC      per main road segment: lanes, capacity, free speed, peak load,
+                                                direction, hotspot, real roadworks on the simulated day
   road_data_sources.csv    ROAD_DATA_SOURCES    source, license, URL and retrieval time per table
   districts.csv            DISTRICTS            copied from the Munich dataset (data/munich-dataset), so the
   roadworks.csv            ROADWORKS            schema is complete on its own
@@ -41,6 +47,7 @@ import io
 import json
 import math
 import re
+import statistics
 import shutil
 import sys
 import time
@@ -62,6 +69,7 @@ except ImportError as e:  # pragma: no cover
 
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
+ROOT = Path(__file__).resolve().parent.parent
 USER_AGENT = "munich-mobility-agents/1.0 (road safety demo data preparation)"
 BERLIN = ZoneInfo("Europe/Berlin")
 NOW = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -558,6 +566,196 @@ def autobahn_part(args, out: Path, study, sources):
                     "attribution": "© Die Autobahn GmbH des Bundes", "url": AUTOBAHN_BASE + "/", "retrieved_at": NOW})
 
 
+# --------------------------------------------------------------------------- traffic model inputs
+BAST_HOURLY_URL = "https://www.bast.de/videos/{year}_A_S.zip"
+BAST_STATIONS_URL = ("https://www.bast.de/DE/Themen/Digitales/HF_1/Massnahmen/verkehrszaehlung/Daten/{year}_1/"
+                     "Jawe{year}.csv?view=renderTcDataExportCSV")
+# BASt permanent count stations on the motorways around Munich (Jawe2024 numbers)
+BAST_STATIONS = ("9115 9066 9242 9064 9063 9062 9215 9155 9775 9213 9244 9229 9207 9219 9220 9141 9140 9224 "
+                 "9082 9083 9106 9222 9043 9221 9217 9987").split()
+MAIN_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link",
+                "secondary", "secondary_link", "tertiary"}
+CAP_PER_LANE = {"motorway": 1900, "trunk": 1700, "primary": 1100, "secondary": 900, "tertiary": 700}
+LINK_CAP = 1200
+DEFAULT_LANES = {"motorway": 3, "trunk": 2, "primary": 2, "secondary": 1, "tertiary": 1}
+# load at the peak hour (volume / capacity) for city roads without counts; motorways come from BASt
+CITY_PEAK_VC = {"trunk": 0.80, "primary": 0.75, "secondary": 0.65, "tertiary": 0.50}
+CENTRE = (11.575, 48.137)
+TRAFFIC_HEADER = ["segment_id", "road_class", "road", "lanes_dir", "capacity_vph", "free_kmh", "peak_vc", "flow_dir",
+                  "hotspot_id", "hotspot_factor", "roadworks", "roadworks_source", "capacity_factor"]
+
+
+def bast_part(args, out: Path, cache: Path, sources) -> dict:
+    """Hourly profiles (Tue-Thu working days) and per-motorway load from BASt count stations."""
+    year = args.bast_year
+    zpath = fetch(BAST_HOURLY_URL.format(year=year), cache / "bast" / f"{year}_A_S.zip")
+    jawe_text = fetch(BAST_STATIONS_URL.format(year=year)).decode("latin-1")
+    jawe = {r["DZ_Nr"]: r for r in csv.DictReader(io.StringIO(jawe_text), delimiter=";")}
+    kind = {}
+    for z in BAST_STATIONS:
+        r = jawe.get(z)
+        if not r:
+            continue
+        if r["Str_Nr"].strip() == "99":
+            kind[z] = ("ring", 0)
+        elif "München" in r["Fernziel_Ri1"]:
+            kind[z] = ("radial", 1)
+        elif "München" in r["Fernziel_Ri2"]:
+            kind[z] = ("radial", 2)
+    sums: dict = {}
+    print(f"BASt {year}: reading hourly values of {len(kind)} stations (a minute) ...")
+    with zipfile.ZipFile(zpath) as zf, zf.open(zf.namelist()[0]) as fh:
+        rd = csv.reader(io.TextIOWrapper(fh, encoding="latin-1"), delimiter=";")
+        next(rd)
+        for row in rd:
+            z = row[1].strip()
+            if z not in kind or row[6].strip() not in ("2", "3", "4") or row[7].strip() != "w":
+                continue
+            if row[10].strip() != "-" or row[12].strip() != "-":
+                continue
+            h, r1, r2 = int(row[8]) - 1, int(row[9]), int(row[11])
+            if r1 < 0 or r2 < 0:
+                continue
+            k, inb = kind[z]
+            if k == "ring":
+                sums.setdefault((z, "ring"), [0.0] * 24)[h] += (r1 + r2) / 2
+            else:
+                sums.setdefault((z, "inbound"), [0.0] * 24)[h] += r1 if inb == 1 else r2
+                sums.setdefault((z, "outbound"), [0.0] * 24)[h] += r2 if inb == 1 else r1
+    prof = {d: [0.0] * 24 for d in ("inbound", "outbound", "ring")}
+    n = {d: 0 for d in prof}
+    for (z, d), hs in sums.items():
+        tot = sum(hs)
+        if tot > 0 and all(v > 0 for v in hs[5:22]):
+            for h in range(24):
+                prof[d][h] += hs[h] / tot
+            n[d] += 1
+    rows = [{"hour": h, **{d: round(prof[d][h] / max(n[d], 1), 5) for d in prof}} for h in range(24)]
+    write_csv(out / "traffic_profile.csv", ["hour", "inbound", "outbound", "ring"], rows)
+    # peak-hour load per motorway: DTV per direction x peak share / (lanes per direction x capacity)
+    peak_share = max(r["inbound"] for r in rows)
+    st_rows, by_ref = [], {}
+    for z, (k, inb) in kind.items():
+        r = jawe[z]
+        try:
+            dtv = float(r["DTV_Kfz_W_Q"].replace(".", "").replace(",", ".")) if r["DTV_Kfz_W_Q"].strip() else None
+            lanes = int(r["Anz_Fs_Q"])
+        except ValueError:
+            dtv, lanes = None, 0
+        vc = round(dtv / 2 * peak_share / (lanes / 2 * CAP_PER_LANE["motorway"]), 3) if dtv and lanes else None
+        ref = "A " + r["Str_Nr"].strip()
+        st_rows.append({"station": z, "road": ref, "name": r["DZ_Name"].strip(), "lanes": lanes,
+                        "dtv_weekday": int(dtv) if dtv else None, "kind": k, "peak_vc": vc})
+        if vc:
+            by_ref.setdefault(ref, []).append(vc)
+    write_csv(out / "bast_stations.csv", ["station", "road", "name", "lanes", "dtv_weekday", "kind", "peak_vc"], st_rows)
+    ref_vc = {ref: round(statistics.median(v), 3) for ref, v in by_ref.items()}
+    print(f"  peak-hour load per motorway (median of stations): {ref_vc}")
+    for t in ("TRAFFIC_PROFILE", "BAST_STATIONS"):
+        sources.append({"table_name": t, "source": f"BASt automatic count stations, hourly values {year} (Tue-Thu working days)",
+                        "license": "CC BY 4.0", "attribution": "Bundesanstalt für Straßenwesen (BASt)",
+                        "url": BAST_HOURLY_URL.format(year=year), "retrieved_at": NOW})
+    return ref_vc
+
+
+def traffic_part(args, out: Path, sources, ref_vc: dict) -> None:
+    """Capacity, peak load, direction, hotspot and roadworks per main road segment."""
+    day = args.traffic_day
+    hot = list(csv.DictReader(open(ROOT / "data" / "source" / "traffic_hotspots.csv", encoding="utf-8")))
+    write_csv(out / "traffic_hotspots.csv", list(hot[0]), hot)
+    segs = [r for r in csv.DictReader(open(out / "road_segments.csv", encoding="utf-8")) if r["road_class"] in MAIN_CLASSES]
+    lines = [to_m(shp_wkt.loads(r["geometry_wkt"])) for r in segs]
+    tree = STRtree(lines)
+    # real roadworks that narrow or close the carriageway, valid on the simulated day
+    works = {}
+    lane_rx = re.compile(r"Fahrspur|Fahrstreifen|Einengung|eingeengt|halbseitig|Vollsperr|Straßensperr|"
+                         r"Fahrbahneinschränkung|Fahrbahn gesperrt|Fahrbahnsperr", re.I)
+    for r in csv.DictReader(open(out / "roadworks.csv", encoding="utf-8")):
+        text = f"{r['impact']} {r['kind']}"
+        if not (r["start_date"] <= day <= r["end_date"]) or not lane_rx.search(text) or not r.get("shape_wkt"):
+            continue
+        site = to_m(shp_wkt.loads(r["shape_wkt"]))
+        if site.area > 200_000:                         # district-wide areas are no lane closure
+            continue
+        closed = re.search(r"Vollsperr|Straßensperrung(?!.*halbseitig)", text) is not None
+        zone = site.buffer(10)
+        for i in tree.query(zone, predicate="intersects"):
+            if lines[int(i)].intersection(zone).length < 30:  # a side street that only touches the site
+                continue
+            f = 0.35 if closed else 0.6
+            label = f"City roadworks {r['street']}: {r['impact'] or r['kind']}".strip()
+            if works.get(int(i), (1.0,))[0] > f:
+                works[int(i)] = (f, label[:200], "City of Munich")
+    for r in csv.DictReader(open(out / "motorway_events.csv", encoding="utf-8")):
+        if r["service"] != "roadworks" or r["future"] == "1" or not r["extent_wkt"]:
+            continue
+        geom = to_m(shp_wkt.loads(r["extent_wkt"]))
+        for i in tree.query(geom.buffer(25), predicate="intersects"):
+            s = segs[int(i)]
+            if s["road_class"] != "motorway" or abs(((float(s["heading_deg"]) - _bearing(geom)) + 180) % 360 - 180) > 60:
+                continue
+            if works.get(int(i), (1.0,))[0] > 0.67:
+                works[int(i)] = (0.67, f"Motorway roadworks {r['title']}"[:200], "Autobahn GmbH")
+    rows = []
+    cx, cy = CENTRE
+    for i, r in enumerate(segs):
+        rc = r["road_class"]
+        base = rc.replace("_link", "")
+        lon, lat = float(r["mid_lon"]), float(r["mid_lat"])
+        oneway = r["oneway"] in ("1", "-1")
+        try:
+            lanes = int(r["lanes"])
+            lanes = lanes if oneway else max(1, lanes // 2)
+        except ValueError:
+            lanes = 1 if rc.endswith("_link") else DEFAULT_LANES[base]
+        cap = lanes * (LINK_CAP if rc.endswith("_link") else CAP_PER_LANE[base])
+        free = float(r["maxspeed_kmh"]) if r["maxspeed_kmh"] else {"motorway": 120, "trunk": 70, "primary": 50,
+                                                                   "secondary": 50, "tertiary": 50}[base]
+        # direction relative to the centre: toward it (inbound), away (outbound), around it (ring)
+        to_c = math.degrees(math.atan2((cx - lon) * 74300, (cy - lat) * 110540)) % 360
+        off = abs((float(r["heading_deg"]) - to_c + 180) % 360 - 180)
+        dist = math.hypot((cx - lon) * 74300, (cy - lat) * 110540)
+        flow = "ring" if (60 <= off <= 120 or dist < 1500) else ("inbound" if off < 60 else "outbound")
+        refs = [x.strip() for x in r["ref"].split(";") if x.strip()]
+        if base == "motorway":
+            vc = max([ref_vc.get(x, 0.0) for x in refs] + [0.0]) or 0.75
+        else:
+            vc = CITY_PEAK_VC[base]
+        if rc.endswith("_link"):
+            vc *= 0.8
+        hid, hfac = "", 1.0
+        for h in hot:
+            roads = [x.strip() for x in h["roads"].split(";")]
+            if not (set(refs) & set(roads) or r["name"] in roads):
+                continue
+            if math.hypot((float(h["lon"]) - lon) * 74300, (float(h["lat"]) - lat) * 110540) > float(h["radius_m"]):
+                continue
+            if h["direction"] == "inbound" and flow != "inbound":
+                continue
+            if float(h["demand_factor"]) > hfac:
+                hid, hfac = h["hotspot_id"], float(h["demand_factor"])
+        wf, wtext, wsrc = works.get(i, (1.0, "", ""))
+        rows.append({"segment_id": r["segment_id"], "road_class": rc, "road": r["name"] or r["ref"], "lanes_dir": lanes,
+                     "capacity_vph": cap, "free_kmh": free, "peak_vc": round(vc, 3), "flow_dir": flow,
+                     "hotspot_id": hid, "hotspot_factor": hfac, "roadworks": wtext, "roadworks_source": wsrc,
+                     "capacity_factor": wf})
+    write_csv(out / "segment_traffic.csv", TRAFFIC_HEADER, rows)
+    print(f"  {sum(1 for r in rows if r['hotspot_id'])} segments at hotspots, "
+          f"{sum(1 for r in rows if r['roadworks'])} with roadworks on {day}")
+    sources.append({"table_name": "TRAFFIC_HOTSPOTS", "source": "Research from INRIX, TomTom, ADAC Südbayern and press "
+                    "(research/munich-congestion-hotspots.md)", "license": "facts with sources", "attribution": "see the source column",
+                    "url": "research/munich-congestion-hotspots.md", "retrieved_at": NOW})
+    sources.append({"table_name": "SEGMENT_TRAFFIC", "source": "Derived: OSM lanes and speed limits, BASt loads, hotspots, "
+                    f"City of Munich and Autobahn GmbH roadworks valid on {day}", "license": "ODbL (derived from OSM)",
+                    "attribution": "© OpenStreetMap contributors; BASt; City of Munich; Die Autobahn GmbH des Bundes",
+                    "url": "scripts/prepare_road_data.py", "retrieved_at": NOW})
+
+
+def _bearing(line) -> float:
+    (x1, y1), (x2, y2) = line.coords[0], line.coords[-1]
+    return math.degrees(math.atan2(x2 - x1, y2 - y1)) % 360
+
+
 # --------------------------------------------------------------------------- main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -565,12 +763,14 @@ def main() -> int:
     ap.add_argument("--cache", default=str(Path.home() / ".cache" / "munich-road-data"), help="download cache")
     ap.add_argument("--districts", default=str(Path(__file__).resolve().parent.parent / "data" / "munich-dataset" / "districts.csv"),
                     help="districts.csv of MUNICH_DATASET (for the city boundary)")
-    ap.add_argument("--only", nargs="+", choices=["osm", "accidents", "weather", "autobahn"],
+    ap.add_argument("--only", nargs="+", choices=["osm", "accidents", "weather", "autobahn", "traffic"],
                     help="build only these parts (accidents needs osm in the same run for the segment match)")
     ap.add_argument("--weather-from", default="2022-01-01", help="first day of weather values (default 2022-01-01)")
     ap.add_argument("--accident-from", type=int, default=2016, help="first accident year (default 2016)")
+    ap.add_argument("--bast-year", type=int, default=2024, help="year of the BASt hourly counts (default 2024)")
+    ap.add_argument("--traffic-day", default="2026-10-27", help="simulated day: roadworks valid on it (default 2026-10-27)")
     args = ap.parse_args()
-    parts = set(args.only or ["osm", "accidents", "weather", "autobahn"])
+    parts = set(args.only or ["osm", "accidents", "weather", "autobahn", "traffic"])
 
     out, cache = Path(args.out).expanduser(), Path(args.cache).expanduser()
     out.mkdir(parents=True, exist_ok=True)
@@ -584,7 +784,8 @@ def main() -> int:
             sources = list(csv.DictReader(f))
 
     rebuilt = {"osm": ("ROAD_SEGMENTS", "ROAD_AREAS"), "accidents": ("ACCIDENTS",),
-               "weather": ("WEATHER_STATIONS", "WEATHER_10MIN", "WEATHER_VISIBILITY"), "autobahn": ("MOTORWAY_EVENTS",)}
+               "weather": ("WEATHER_STATIONS", "WEATHER_10MIN", "WEATHER_VISIBILITY"), "autobahn": ("MOTORWAY_EVENTS",),
+               "traffic": ("TRAFFIC_PROFILE", "BAST_STATIONS", "TRAFFIC_HOTSPOTS", "SEGMENT_TRAFFIC")}
     drop = {t for p in parts for t in rebuilt[p]}
     sources = [s for s in sources if s["table_name"] not in drop]
 
@@ -612,6 +813,8 @@ def main() -> int:
         weather_part(args, out, cache, sources)
     if "autobahn" in parts:
         autobahn_part(args, out, study, sources)
+    if "traffic" in parts:
+        traffic_part(args, out, sources, bast_part(args, out, cache, sources))
 
     write_csv(sources_path, ["table_name", "source", "license", "attribution", "url", "retrieved_at"],
               sorted(sources, key=lambda s: s["table_name"]))
