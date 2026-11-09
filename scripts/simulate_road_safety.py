@@ -61,6 +61,7 @@ import random
 import signal
 import ssl
 import sys
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -378,7 +379,7 @@ class Publisher:
             self.producer.send(topic, key=key.encode(), value=json.dumps(msg, ensure_ascii=False).encode())
         else:
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            self.rows.append((topic, f"direct-run-{self.run_id}", 0, self.offsets[topic], now, now,
+            self.rows.append((topic, f"direct-{self.run_id}-{topic}", 0, self.offsets[topic], now, now,
                               json.dumps(msg, ensure_ascii=False)))
             self.offsets[topic] += 1
 
@@ -423,7 +424,8 @@ class Sim:
         self.bg_segs = [s.sid for s in main]
         self.bg_weights = [s.length * CLASS_WEIGHT.get(s.road_class, 0.5) * capw.get(s.sid, 0.5) for s in main]
         self.main_segs = main
-        self.sensors = list(c.execute('SELECT * FROM ROAD_SAFETY.INFRA_SENSORS'))
+        # fixed sensors only: a warning trailer (location_kind mobile) reports only while its road works run
+        self.sensors = list(c.execute("SELECT * FROM ROAD_SAFETY.INFRA_SENSORS WHERE \"location_kind\" <> 'mobile'"))
         if not self.sensors:
             sys.exit("error: no sensors; run `setup` first")
         day = datetime.strptime(args.weather_day, "%Y-%m-%d")
@@ -557,9 +559,11 @@ class Sim:
             lon, lat, hdg = run_.ww_now
             seg = min(((rs.dist_m(self.graph[s].mid, (lon, lat)), s) for s, _ in run_.ww_path))[1]
             return lon, lat, hdg, road_label(self.graph[seg])
-        if k == "storm":
+        if k == "storm":                                 # within 3 km of the storm's core, in the moving band
             x0, y0, x1, y1 = run_.area.polygon.bounds
-            cands = [s for s in self.main_segs if x0 <= s.mid[0] <= x1 and y0 <= s.mid[1] <= y1]
+            core = (y0 + y1) / 2
+            cands = [s for s in self.main_segs if x0 <= s.mid[0] <= x1 and y0 <= s.mid[1] <= y1
+                     and abs(s.mid[1] - core) * KY <= 3000]
             if not cands:
                 return None
             seg = self.rng.choice(cands)
@@ -757,6 +761,56 @@ class MessageLog:
             print("\n".join(lines), flush=True)
 
 
+class IncidentWatcher(threading.Thread):
+    """Polls ROAD_SAFETY.INCIDENTS (written by scripts/road_safety_service.py) and prints a banner when an
+    incident is confirmed or cleared, a line when it changes. Only the combination SQL decides."""
+
+    def __init__(self, deployment: str, log: MessageLog, run_id: int, every_s: float = 2.0):
+        super().__init__(daemon=True)
+        self.c, self.log, self.run_id, self.every = connect(deployment), log, run_id, every_s
+        self.seen: dict[str, int] = {}
+
+    def run(self):
+        while True:
+            try:
+                rows = list(self.c.execute('SELECT * FROM ROAD_SAFETY.INCIDENTS WHERE "run_id" = {r!d}', {"r": self.run_id}))
+                for h in rows:
+                    v = int(h["version"])
+                    if self.seen.get(h["incident_id"]) != v:
+                        self.show(h, first=h["incident_id"] not in self.seen)
+                        self.seen[h["incident_id"]] = v
+            except pyexasol.ExaQueryError:
+                pass                                   # INCIDENTS doesn't exist until the service has started once
+            except Exception as e:  # noqa: BLE001 - keep watching
+                print(f"(incident watcher: {type(e).__name__})", flush=True)
+            time.sleep(self.every)
+
+    def show(self, h, first: bool):
+        what = h["srti_category"].replace("_", " ") + (f" (cause: {h['cause']})" if h["cause"] else "")
+        road = h["road"] or "unnamed road"
+        red = self.log.RED + self.log.BOLD
+        if h["status"] == "cleared":
+            print(self.log.c(red, f">>> INCIDENT CLEARED: {h['incident_id']} {what} on {road}"), flush=True)
+            return
+        if not first:
+            n, m = int(h["providers"]), int(h["sensors"])
+            print(self.log.c(red, f">>> incident {h['incident_id']} updated: {what} on {road}, {n} provider{'s' * (n != 1)}, "
+                                  f"{m} sensor{'s' * (m != 1)}, confidence {float(h['confidence']):.2f}"), flush=True)
+            return
+        secs = int((h["confirmed_at"] - h["first_report_at"]).total_seconds())
+        reach = (f"about {int(h['reach_vehicles']):,} vehicles " + ("in the area" if h["reach_kind"] == "in_area"
+                                                                    else "pass it in the next 10 minutes")
+                 if h["reach_vehicles"] is not None else "reach unknown")
+        bar = "=" * 100
+        lines = [bar, f">>> INCIDENT CONFIRMED BY EXASOL: {what.upper()} on {road} ({h['incident_id']})",
+                 f"    first report {h['first_report_at']:%H:%M:%S}, confirmed {h['confirmed_at']:%H:%M:%S} ({secs} s later) "
+                 f"by {h['rule']}: " + " + ".join(x for x in (h["provider_list"],
+                                                              f"sensors {h['sensor_list']}" if h["sensor_list"] else "") if x),
+                 f"    at {float(h['lat']):.5f},{float(h['lon']):.5f}, confidence {float(h['confidence']):.2f}; {reach}. "
+                 "Published to srti.confirmed.", bar]
+        print("\n".join(self.log.c(red, ln) for ln in lines), flush=True)
+
+
 def run(args) -> None:
     c = connect(args.deployment)
     c.execute("UPDATE ROAD_SAFETY.SIM_STATE SET \"status\" = 'stopped' WHERE \"status\" = 'running'")
@@ -773,6 +827,7 @@ def run(args) -> None:
     log = MessageLog(sim, args.log) if args.log else None
     if log:
         log.legend()
+        IncidentWatcher(args.deployment, log, sim.run_id).start()
     counts = defaultdict(int)
     try:
         while not stop["flag"]:

@@ -201,7 +201,8 @@ class Loader:
                     print(f"{now()} import failed: {one_line(msg)}", flush=True)
                 continue
             n = self.copy(topic, topics[topic])
-            print(f"{now()} {topic}: +{n} messages ({secs:.1f} s)", flush=True)
+            if getattr(self.args, "verbose", True):
+                print(f"{now()} {topic}: +{n} messages ({secs:.1f} s)", flush=True)
 
     def run(self) -> None:
         while True:
