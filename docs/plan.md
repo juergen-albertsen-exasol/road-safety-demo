@@ -2,11 +2,11 @@
 
 This is the working plan the demo was built from, kept as its design record. How to set up and run the demo is in [README.md](../README.md) and [AGENTS.md](../AGENTS.md); the background on the Mobility Data Space and DFRS is in [context.md](context.md).
 
-Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: step 2 (Redpanda sidecar) done.
+Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: steps 2 (Redpanda sidecar) and 3 (loading) done.
 
 ## Revision 2026-11-09: a reference implementation for DFRS partners
 
-**Status: in progress.** Done: step 2 (Redpanda and Console as sidecars, `scripts/setup_kafka.py`).
+**Status: in progress.** Done: step 2 (Redpanda and Console as sidecars) and step 3 (Kafka connector, loader, restart test); `scripts/setup_kafka.py`, `scripts/kafka_loader.py`.
 
 ### The pitch
 
@@ -57,7 +57,8 @@ The boundary of the box is the point: everything inside is what a partner runs; 
 
 | Table | Content |
 |---|---|
-| `SRTI_EVENTS` | Every inbound event as received, with topic, partition and offset (replaces `VEHICLE_SIGNALS` as the input to detection) |
+| `INBOUND_MESSAGES` | Every message as received, raw JSON, with topic, topic id, partition, offset and Kafka timestamp. Written by the loader (built in step 3) |
+| `SRTI_EVENTS` | The inbound events parsed from `INBOUND_MESSAGES` (replaces `VEHICLE_SIGNALS` as the input to detection) |
 | `SENSOR_READINGS` | As today, now loaded from the road operator topic |
 | `INCIDENTS` | Confirmed incidents with a stable id and lifecycle: first event, confirmed, updated, cleared; category, cause, confidence, providers, reach |
 | `INCIDENT_EVIDENCE` | Which events and sensor readings support which incident |
@@ -100,8 +101,10 @@ A scheduled step (every few seconds, run by the loader or a Lua script) turns th
 - On macOS the sidecar runs in the database VM and takes memory from it. Measured on 2026-11-09: Redpanda about 290 MB, Console about 50 MB, in a VM with 24 GB and 2 CPUs (the database used about 2 GB at the time).
 - Images from `docker.io/redpandadata/` (`redpanda:v26.2.6`, `console:v3.13.1`), not `docker.redpanda.com`: that front hit Docker Hub's anonymous pull limit while `docker.io` worked.
 - Python client on the laptop: `kafka-python` (pure Python). `confluent-kafka` has no stable wheel for Python 3.15 yet.
-- **Loading into Exasol:** the Exasol Kafka connector extension (MIT, `exasol/kafka-connector-extension`; Java `SET` scripts `KAFKA_CONSUMER`, `KAFKA_IMPORT`, `KAFKA_METADATA`, the JAR in BucketFS; imports in batches every few seconds). It keeps no state of its own: the target table has the columns `KAFKA_PARTITION` and `KAFKA_OFFSET`, and each import continues after the highest offset per partition found there. Lower `POLL_TIMEOUT_MS` (default 30 s) so a run with few messages returns quickly. Fallback if it doesn't run on Exasol Personal: a small Python consumer in `scripts/` that loads micro-batches with pyexasol. Either way the loader keeps its position in Exasol, not in Redpanda (see the next section).
-- **Topic names carry the run id** (`srti.oem-a.<run>`, `srti.confirmed.<run>`): after a restart the topics are recreated empty at offset 0, while `SRTI_EVENTS` still holds higher offsets from the last run. A connector resuming from those would skip every new message. With the run id in the name, a new topic has no rows yet, so loading starts at 0. The architecture sketch shows the topics without the suffix.
+- **Loading into Exasol (built, step 3):** the Exasol Kafka connector extension 2.0.1 (MIT; Java `SET` scripts `KAFKA_CONSUMER`, `KAFKA_IMPORT`, `KAFKA_METADATA` in schema `KAFKA_EXTENSION`; JAR in BucketFS; needs the Java script language container). The database pulls the messages itself; `scripts/kafka_loader.py` on the laptop only decides when: every 3 s it compares Kafka's end offsets with what is loaded and imports only topics with new messages, up to 4 in parallel. Each import costs 2 to 3 s (JVM start), so a topic with nothing new is skipped.
+- **Measured:** 3 to 5 s from send to row in Exasol (`POLL_TIMEOUT_MS = 1000`, `CONSUME_ALL_OFFSETS = true`).
+- **The connector resumes per table, not per topic:** it reads `MAX(KAFKA_OFFSET)` per partition from the table named in `TABLE_NAME`. So each topic gets its own staging table in `KAFKA_STAGE` (only the last row per partition is kept); after each import the new rows are copied into `ROAD_SAFETY.INBOUND_MESSAGES`. Topic names stay plain (`srti.oem-a`); a run id in the name, as planned first, would not have helped.
+- **The UDF sandbox has no DNS** (empty `resolv.conf` and `hosts`), so `redpanda` doesn't resolve in a UDF, while the IP works. The Java scripts read a hosts file from BucketFS (`%jvmoption -Djdk.net.hosts.file=/buckets/bfsdefault/default/kafka/hosts`); the loader writes it with Redpanda's current IP (`podman inspect` in the VM through `exasol shell host`) at start and after an outage. Redpanda keeps advertising `redpanda:9092`.
 
 ### Persistence: sidecars keep nothing, Exasol keeps everything
 
@@ -109,8 +112,8 @@ Sidecars can't keep files across restarts (no volumes; `exasol stop` removes the
 
 | What | Where in Exasol | After a restart |
 |---|---|---|
-| Every inbound event | `SRTI_EVENTS`, with topic, partition and offset | Kept. Topics start empty; nothing is lost because everything received is already loaded |
-| The loader's position per topic and partition | Derived from `SRTI_EVENTS`: the highest `KAFKA_OFFSET` per topic and partition | **Resets by itself**: recreated topics start at offset 0, but they have a new name (the run id is part of it), so no offsets are stored for them yet and loading starts at 0. No separate offset table or generation id needed |
+| Every inbound message | `INBOUND_MESSAGES`, with topic, topic id, partition and offset | Kept. Topics start empty. Messages Redpanda acknowledged but the loader hadn't imported yet (the last 3 to 5 s before `exasol stop`) are lost |
+| The loader's position per topic and partition | The last row per partition in the topic's staging table (`KAFKA_STAGE.<TOPIC>`), and the topic id in `KAFKA_STAGE.TOPICS` | **Resets by itself:** a recreated topic has a new topic id (Kafka assigns a UUID); the loader then empties the staging table and loads from offset 0 again. Tested on 2026-11-09 with a producer running through `exasol stop` and `start`: 69 acknowledged messages, none missing, each Kafka position loaded once, the loader reconnected by itself |
 | Incidents and their evidence | `INCIDENTS`, `INCIDENT_EVIDENCE` | Kept; active ones expire or clear by the normal rules |
 | What was published | `OUTBOUND_MESSAGES` | Kept. On start, still active incidents are published to `srti.confirmed` again, so subscribers see the current state |
 | Triggers, simulated time | `SCENARIO_LOG`, `SIM_STATE` | As today (runs don't resume) |
@@ -145,7 +148,7 @@ Not run in iteration 1: heavy, invisible on stage, and it needs an MDS identity.
 
 1. Event format: get a DFRS sample message from MDS; until then define the JSON from real DATEX II SRTI messages (Digitraffic).
 2. Redpanda sidecar: entry in `sidecars.yaml`, check from the laptop and from the database (`redpanda:9092`), memory in the VM; optionally Redpanda Console. Setup step in `AGENTS.md`.
-3. Loading: try the Exasol Kafka connector extension on Exasol Personal (Java UDFs, JAR in BucketFS); otherwise the Python consumer. Measure the time from message to row with a low `POLL_TIMEOUT_MS`. Test a restart: `exasol stop` and `start` with the simulator running, then check that no message is skipped or loaded twice and that active incidents are published again.
+3. Loading: try the Exasol Kafka connector extension on Exasol Personal (Java UDFs, JAR in BucketFS); otherwise the Python consumer. Measure the time from message to row with a low `POLL_TIMEOUT_MS`. Test a restart: `exasol stop` and `start` with the simulator running, then check that no message is skipped or loaded twice and that active incidents are published again. **Done** except the republishing of incidents, which comes with step 5.
 4. Simulator: fake event sources per provider, background reports, trigger defaults per category, the steering options (`--providers`, `--sensor`, `--delay`, `--confidence`), road operator topic, `--transport`. Remove the probe vehicles.
 5. Combination SQL, reach from traffic volume, `INCIDENTS`, `INCIDENT_EVIDENCE`, publishing to `srti.confirmed`. Test all trigger types again (same list as the 2026-11-07 test), each with one provider (not confirmed) and two (confirmed).
 6. Dashboard: events by provider, outbound ticker, offers panel, traffic volume background.
@@ -156,7 +159,9 @@ Not run in iteration 1: heavy, invisible on stage, and it needs an MDS identity.
 Checked on 2026-11-09:
 
 - **Kafka connector license:** MIT. Release 2.0.1 of 26 Oct 2026, actively maintained.
-- **Offsets in the Kafka connector:** read from the target table (`KAFKA_PARTITION`, `KAFKA_OFFSET`); no reset option. Solved by the run id in the topic names (see "Kafka").
+- **Offsets in the Kafka connector:** read from the target table (`KAFKA_PARTITION`, `KAFKA_OFFSET`) across all topics in it; no reset option. Solved with a staging table per topic and the topic id (see "Kafka").
+- **Does the connector run on Exasol Personal?** Yes, with the Java script language container and a hosts file for the name `redpanda` (see "Kafka").
+- **Latency of loading:** 3 to 5 s from send to row. What remains is the event delays per provider and the combination step (step 5).
 - **Redpanda's license:** fine for partners running it for their own service (see "Kafka"). A legal sign-off is still sensible.
 - **EDC state (iteration 2):** in memory by default; SQL stores are PostgreSQL only. See "Connector".
 - **Memory in the macOS VM:** no problem, see "Kafka" (measured in step 2).
@@ -164,8 +169,8 @@ Checked on 2026-11-09:
 Still open:
 
 - The real DFRS event format and fields: no public sample; ask MDS. Until then, model on Digitraffic's SRTI messages.
-- Does the Kafka connector extension run on Exasol Personal (Java UDFs, the JAR in BucketFS)? Nothing in the docs speaks against it; test in step 3.
-- Latency: event delays plus Kafka plus batch loading; on stage the confirmation should come within about a minute of the trigger. Measure in steps 3 and 5.
+- Latency end to end: event delays plus loading (3 to 5 s) plus combination; on stage the confirmation should come within about a minute of the trigger. Measure in step 5.
+- Duplicates from producers: a send that times out and is retried can reach Kafka twice (seen in the restart test). The combination must de-duplicate by event id, as planned.
 
 ## Revision 2026-11-07: safety events anywhere, derived from sensors
 
