@@ -1,7 +1,7 @@
 """Traffic model for the road safety simulator: load, capacity, queues and speed per road segment.
 
-The simulated vehicles are probe vehicles: the connected share of the traffic. Behind them this model
-keeps the traffic on every main road segment and direction:
+Keeps the traffic on every main road segment and direction (the simulator has no individual vehicles;
+the road operator's loop detectors and cameras read their counts and speeds from here):
 
 - load = peak-hour load (ROAD_DATA.SEGMENT_TRAFFIC.peak_vc: BASt counts for motorways, road class for
   city roads) x hotspot factor x rush-hour curve (ROAD_DATA.TRAFFIC_PROFILE, BASt 2024, Tue-Thu) for the
@@ -13,7 +13,6 @@ keeps the traffic on every main road segment and direction:
   the queue covers the upstream segments of the same road, where traffic crawls;
 - elsewhere the speed falls as the load approaches capacity.
 
-The probe vehicles drive at these speeds, so the SQL sees the congestion only through their signals.
 """
 from __future__ import annotations
 
@@ -117,6 +116,23 @@ class TrafficModel:
                 cur = nxt
         self.speed = speed
         self.queued = queued
+
+    def vehicles_on(self, sid: int, when) -> tuple[int, int] | None:
+        """Vehicles on a main road segment (both directions) and their average speed, for the road
+        operator's loop detectors and cameras: density = flow / speed, flow = load x capacity."""
+        s = self.seg.get(sid)
+        if s is None:
+            return None
+        hour = when.hour + when.minute / 60 + when.second / 3600
+        count, speeds = 0.0, []
+        for fwd in (True, False):
+            v = self.speed.get((sid, fwd))
+            if v is None:
+                continue
+            flow = s["load"] * self.factor(s["flow"] if fwd else INVERT[s["flow"]], hour) * s["cap"]
+            count += flow / max(v, 5.0) * self.graph[sid].length / 1000 + self.queue.get((sid, fwd), 0.0)
+            speeds.append(v)
+        return (round(count), round(sum(speeds) / len(speeds))) if speeds else None
 
     def kmh(self, sid: int, fwd: bool):
         """Current speed on a main road segment, or None for minor roads."""

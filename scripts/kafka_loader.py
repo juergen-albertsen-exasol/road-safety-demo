@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import re
 import ssl
 import subprocess
@@ -102,7 +103,9 @@ class Loader:
         self.admin = KafkaAdminClient(bootstrap_servers=BROKER_LAPTOP, client_id="road-safety-loader")
         self.consumer = KafkaConsumer(bootstrap_servers=BROKER_LAPTOP, enable_auto_commit=False)
         self.pool = ThreadPoolExecutor(max_workers=args.parallel)
-        self.conns = [connect(args.deployment) for _ in range(args.parallel)]
+        self.conns: queue.Queue = queue.Queue()     # each import borrows one: a connection serves one thread at a time
+        for _ in range(args.parallel):
+            self.conns.put(connect(args.deployment))
         self.known: dict[str, str] = {r[0]: r[1] for r in self.db.execute(
             'SELECT "topic", "topic_id" FROM KAFKA_STAGE.TOPICS').fetchall()}
 
@@ -146,25 +149,37 @@ class Loader:
         return out
 
     # ------------------------------------------------------------------ import
-    def import_topic(self, i: int, topic: str, topic_id: str) -> tuple[str, int, float]:
-        conn = self.conns[i % len(self.conns)]
+    def import_topic(self, topic: str) -> tuple[str, float]:
+        """Runs in parallel, on a connection of its own. Writes only the topic's own staging table."""
+        conn = self.conns.get()
+        try:
+            return self._import(conn, topic)
+        finally:
+            self.conns.put(conn)
+
+    def _import(self, conn, topic: str) -> tuple[str, float]:
         table = stage_table(topic)
         t0 = time.time()
         conn.execute(f"""IMPORT INTO {table} FROM SCRIPT KAFKA_EXTENSION.KAFKA_CONSUMER WITH
             BOOTSTRAP_SERVERS = {q(BROKER_DATABASE)} TOPIC_NAME = {q(topic)} TABLE_NAME = {q(table)}
             GROUP_ID = {q(GROUP_ID)} RECORD_VALUE_FORMAT = 'string' RECORD_FIELDS = 'value,timestamp'
             POLL_TIMEOUT_MS = '1000' CONSUME_ALL_OFFSETS = 'true'""")
-        # Copy what's new into the permanent table, then keep only the last row per partition
-        # (all the connector needs to resume).
-        n = conn.execute(f"""INSERT INTO ROAD_SAFETY.INBOUND_MESSAGES
+        return topic, time.time() - t0
+
+    def copy(self, topic: str, topic_id: str) -> int:
+        """Serially, on the main connection: move what's new into INBOUND_MESSAGES, then keep only the last
+        row per partition (all the connector needs to resume). Parallel sessions reading and writing
+        INBOUND_MESSAGES at once would make Exasol wait or roll back."""
+        table = stage_table(topic)
+        n = self.db.execute(f"""INSERT INTO ROAD_SAFETY.INBOUND_MESSAGES
             SELECT {q(topic)}, {q(topic_id)}, s.KAFKA_PARTITION, s.KAFKA_OFFSET, s.KAFKA_TS, CURRENT_TIMESTAMP, s.PAYLOAD
             FROM {table} s
             LEFT JOIN (SELECT "kafka_partition" p, MAX("kafka_offset") o FROM ROAD_SAFETY.INBOUND_MESSAGES
                        WHERE "topic_id" = {q(topic_id)} GROUP BY 1) m ON m.p = s.KAFKA_PARTITION
             WHERE s.KAFKA_OFFSET > COALESCE(m.o, -1)""").rowcount()
-        conn.execute(f"""DELETE FROM {table} s WHERE s.KAFKA_OFFSET <
+        self.db.execute(f"""DELETE FROM {table} s WHERE s.KAFKA_OFFSET <
             (SELECT MAX(x.KAFKA_OFFSET) FROM {table} x WHERE x.KAFKA_PARTITION = s.KAFKA_PARTITION)""")
-        return topic, n, time.time() - t0
+        return n
 
     def cycle(self) -> None:
         topics = self.topics()
@@ -173,19 +188,20 @@ class Loader:
         todo = {t: n for t, n in self.lag(list(topics)).items() if n > 0}
         if not todo:
             return
-        futures = [self.pool.submit(self.import_topic, i, t, topics[t]) for i, t in enumerate(todo)]
+        futures = [self.pool.submit(self.import_topic, t) for t in todo]
         for f in futures:
             try:
-                topic, n, secs = f.result()
-                print(f"{now()} {topic}: +{n} messages ({secs:.1f} s)", flush=True)
+                topic, secs = f.result()
             except pyexasol.ExaQueryError as e:
                 msg = getattr(e, "message", "") or str(e)
                 if "resolvable" in msg or "UnknownHost" in msg:
                     ip = write_hosts_file(self.args.deployment)
                     print(f"{now()} kafka not resolvable in the UDFs, hosts file rewritten ({ip})", flush=True)
                 else:
-                    first = next((l.strip() for l in msg.splitlines() if l.strip()), type(e).__name__)
-                    print(f"{now()} import failed: {first[:300]}", flush=True)
+                    print(f"{now()} import failed: {one_line(msg)}", flush=True)
+                continue
+            n = self.copy(topic, topics[topic])
+            print(f"{now()} {topic}: +{n} messages ({secs:.1f} s)", flush=True)
 
     def run(self) -> None:
         while True:
@@ -194,6 +210,10 @@ class Loader:
             if self.args.once:
                 return
             time.sleep(max(0.2, self.args.interval - (time.time() - t0)))
+
+
+def one_line(text: str) -> str:
+    return " ".join(str(text).split())[:300]
 
 
 def now() -> str:
@@ -226,8 +246,7 @@ def main() -> None:
         except (SystemExit, Exception) as e:  # noqa: BLE001 - the loader must keep going
             if args.once:
                 raise
-            print(f"{now()} waiting for the database and Kafka: {str(e).splitlines()[0][:200] if str(e) else type(e).__name__}",
-                  flush=True)
+            print(f"{now()} waiting for the database and Kafka: {type(e).__name__}: {one_line(e)}", flush=True)
             time.sleep(10)
 
 

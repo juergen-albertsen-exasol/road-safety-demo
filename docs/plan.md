@@ -2,11 +2,11 @@
 
 This is the working plan the demo was built from, kept as its design record. How to set up and run the demo is in [README.md](../README.md) and [AGENTS.md](../AGENTS.md); the background on the Mobility Data Space and DFRS is in [context.md](context.md).
 
-Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: steps 2 (Kafka sidecar) and 3 (loading) done.
+Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: steps 2 (Kafka sidecar), 3 (loading) and 4 (simulator) done.
 
 ## Revision 2026-11-09: a reference implementation for DFRS partners
 
-**Status: in progress.** Done: step 2 (Apache Kafka and Kafbat UI as sidecars; Redpanda first, replaced the same day) and step 3 (Kafka connector, loader, restart test); `scripts/setup_kafka.py`, `scripts/kafka_loader.py`.
+**Status: in progress.** Done: step 2 (Apache Kafka and Kafbat UI as sidecars; Redpanda first, replaced the same day) step 3 (Kafka connector, loader, restart test) and step 4 (the simulator sends SRTI events per provider); `scripts/setup_kafka.py`, `scripts/kafka_loader.py`, `scripts/srti_events.py`. Until steps 5 and 6 are built nothing gets confirmed, and the dashboard shows no new data.
 
 ### The pitch
 
@@ -150,7 +150,13 @@ Not run in iteration 1: heavy, invisible on stage, and it needs an MDS identity.
 1. Event format: get a DFRS sample message from MDS; until then define the JSON from real DATEX II SRTI messages (Digitraffic).
 2. Kafka sidecar: entry in `sidecars.yaml`, check from the laptop and from the database (`kafka:9092`), memory in the VM; optionally a web UI. Setup step in `AGENTS.md`. **Done** (Apache Kafka and Kafbat UI).
 3. Loading: try the Exasol Kafka connector extension on Exasol Personal (Java UDFs, JAR in BucketFS); otherwise the Python consumer. Measure the time from message to row with a low `POLL_TIMEOUT_MS`. Test a restart: `exasol stop` and `start` with the simulator running, then check that no message is skipped or loaded twice and that active incidents are published again. **Done** except the republishing of incidents, which comes with step 5.
-4. Simulator: fake event sources per provider, background reports, trigger defaults per category, the steering options (`--providers`, `--sensor`, `--delay`, `--confidence`), road operator topic, `--transport`. Remove the probe vehicles.
+4. Simulator: fake event sources per provider, background reports, trigger defaults per category, the steering options (`--providers`, `--sensor`, `--delay`, `--confidence`), road operator topic, `--transport`. Remove the probe vehicles. **Done** (2026-11-09):
+   - Event format in `scripts/srti_events.py` (all field names in one place): DATEX II record type and value per SRTI category, as Digitraffic's DATEX II 3.7 feed uses them (`GeneralObstruction`/`unprotectedAccidentArea`, `PoorEnvironmentConditions`, `probabilityOfOccurrence`, validity from and until). The message never contains the scenario id.
+   - Who can report what and the defaults per scenario (providers, delays, validity, update interval) are in the same module; the trigger refuses impossible combinations.
+   - The road operator's `--sensor` report names a sensor of the right kind within 1 km (road weather station, camera, warning trailer), otherwise a mobile one (`MS-<n>`).
+   - Sensor readings go to `datex.road-operator` too; loop detectors and cameras take their vehicle counts and speeds from the traffic model (`road_traffic.vehicles_on`).
+   - Tested: every scenario type; steering (one provider, a second one added, the sensor added, an impossible provider refused); cancels when a scenario stops; `--transport direct`; 10x speed with eight scenarios at once: 3,362 messages sent, 3,362 loaded, each Kafka position once.
+   - Found on the way: the wrong-way driver ends when it reaches the edge of the road network (A9 north of Garching: after about 1.5 km); the loader shared a database connection between threads with more topics than workers (fixed: a connection pool).
 5. Combination SQL, reach from traffic volume, `INCIDENTS`, `INCIDENT_EVIDENCE`, publishing to `srti.confirmed`. Test all trigger types again (same list as the 2026-11-07 test), each with one provider (not confirmed) and two (confirmed).
 6. Dashboard: events by provider, outbound ticker, offers panel, traffic volume background.
 7. Docs: README (the pitch), `docs/context.md` (the mapping table and "what the demo doesn't show"), AGENTS.md (setup table, troubleshooting), the deck (setup, detection, a slide "what you receive and what you send", the iterations).

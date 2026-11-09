@@ -1,6 +1,7 @@
--- Schema ROAD_SAFETY: the synthetic vehicle and sensor stream of the road safety demo.
+-- Schema ROAD_SAFETY: the partners of the road safety demo and what they send.
 -- Everything in this schema is simulated by scripts/simulate_road_safety.py. The real open
--- data it builds on is in ROAD_DATA (scripts/prepare_road_data.py).
+-- data it builds on is in ROAD_DATA (scripts/prepare_road_data.py). The messages themselves arrive
+-- through Kafka in ROAD_SAFETY.INBOUND_MESSAGES (created by scripts/kafka_loader.py).
 --
 -- Created by `simulate_road_safety.py setup`. Column names are lower case and double quoted,
 -- like ROAD_DATA. Timestamps are simulation time, local (Europe/Berlin), unless named *_wall.
@@ -15,9 +16,12 @@ CREATE OR REPLACE TABLE ROAD_SAFETY.DATA_PROVIDERS (
     "shares_vehicle_dynamics" BOOLEAN,            -- ESC/ABS, airbag, hard braking from the CAN bus
     "shares_environment"      BOOLEAN,            -- outside temperature, wipers, fog lights
     "fleet_share_pct"  DECIMAL(5,1),
+    "topic"            VARCHAR(100),              -- the Kafka topic it publishes to
     PRIMARY KEY ("provider_id")
 );
 
+-- VEHICLES and VEHICLE_SIGNALS belong to the raw-signal version: the simulator no longer writes them
+-- (since 2026-11-09). They stay until the combination SQL and the dashboard no longer read them.
 CREATE OR REPLACE TABLE ROAD_SAFETY.VEHICLES (
     "vehicle_id"       DECIMAL(9,0) NOT NULL,
     "provider_id"      VARCHAR(20) NOT NULL,
@@ -62,7 +66,8 @@ CREATE OR REPLACE TABLE ROAD_SAFETY.VEHICLE_SIGNALS (
     "ingested_wall"    TIMESTAMP NOT NULL          -- wall clock when the row was written
 );
 
--- Readings of the virtual sensors, every 60 s of simulation time.
+-- Readings of the virtual sensors, every 60 s of simulation time. Since 2026-11-09 they are sent to the
+-- topic datex.road-operator; this table is filled from INBOUND_MESSAGES.
 CREATE OR REPLACE TABLE ROAD_SAFETY.SENSOR_READINGS (
     "run_id"           DECIMAL(9,0) NOT NULL,
     "ts"               TIMESTAMP NOT NULL,
@@ -91,6 +96,7 @@ CREATE OR REPLACE TABLE ROAD_SAFETY.SCENARIO_LOG (
     "started_wall"     TIMESTAMP NOT NULL,
     "triggered_by"     VARCHAR(100),
     "note"             VARCHAR(2000),
+    "steering"         VARCHAR(2000),             -- JSON: who reports it, delays, confidence, sensor (trigger options)
     PRIMARY KEY ("scenario_id")
 );
 
@@ -103,8 +109,9 @@ CREATE OR REPLACE TABLE ROAD_SAFETY.SIM_STATE (
     "sim_now"          TIMESTAMP NOT NULL,
     "speed"            DOUBLE NOT NULL,           -- simulation seconds per wall second
     "seed"             DECIMAL(9,0),
-    "vehicles"         DECIMAL(6,0),
+    "vehicles"         DECIMAL(6,0),              -- raw-signal version only
     "started_wall"     TIMESTAMP NOT NULL,
     "updated_wall"     TIMESTAMP NOT NULL,
+    "transport"        VARCHAR(10),               -- kafka or direct
     PRIMARY KEY ("run_id")
 );

@@ -1,11 +1,13 @@
 """Scenarios for the road safety simulator: where they happen and what they change.
 
-A scenario never writes a hazard. It only changes how the synthetic vehicles and sensors in its
-area behave (ESC interventions, braking, fog lights, low friction readings ...). Whether a hazard
-appears is decided by the detection SQL in roadsafety/hazards.sql alone.
+A scenario never writes a hazard. It makes the simulated partners report one: the carmakers and the
+navigation service send SRTI events about it (scripts/srti_events.py says who reports what, when),
+and the road operator's sensors in its area read differently (low friction, poor visibility, a
+wrong-way camera alarm, a warning trailer). Whether that becomes a confirmed incident is decided by
+the combination SQL alone.
 
 Used by scripts/simulate_road_safety.py: `trigger` resolves the area and writes SCENARIO_LOG; the
-running simulator reads SCENARIO_LOG every tick and applies the effects below.
+running simulator reads SCENARIO_LOG every tick.
 
 Where: every scenario can be placed anywhere it makes sense. `locate()` turns a road (number or street
 name), a place name (ROAD_DATA.PLACES: suburbs, villages, motorway junctions, stations, landmarks; or a
@@ -33,54 +35,54 @@ KY = 110540.0
 SCENARIOS = {
     "slippery_road": {
         "label": "temporary slippery road", "default_area": "isar-bridges",
-        "injects": "vehicles crossing get ESC/ABS interventions and slow down, their outside temperature "
-                   "reads about -1 C; the road weather sensors report low friction and a surface below 0 C",
+        "injects": "carmakers report a temporary slippery road (cause: ice, from the outside temperature); "
+                   "road weather sensors in the area report low friction and a surface below 0 C",
         "areas": "any road (a stretch of about 500 m), isar-bridges, or one bridge by name (e.g. reichenbachbruecke)",
     },
     "accident": {
         "label": "accident", "default_area": "a99-nord",
-        "injects": "2 vehicles stop with airbag deployed and hazard lights on; the accident closes 2 of 3 lanes, so a "
-                   "queue builds behind it; traffic arriving at the queue brakes hard and switches on hazard lights",
+        "injects": "carmakers report an unprotected accident area (airbag deployed); the accident closes 2 of 3 lanes, "
+                   "so a queue builds behind it; a tunnel camera there sees a stationary vehicle",
         "areas": "any main road (motorway to tertiary); named: a99-nord, landshuter-allee",
     },
     "oil_spill": {
         "label": "temporary slippery road (oil spill)", "default_area": "a9-freimann",
-        "injects": "on about 500 m, vehicles get ESC/ABS interventions and slow down; the outside temperature stays "
-                   "normal, so it is not ice; nothing else changes",
+        "injects": "carmakers report a temporary slippery road on about 500 m (cause: fluid; the outside temperature "
+                   "is normal, so it is not ice)",
         "areas": "any road (about 500 m in the direction of travel); named: a9-freimann",
     },
     "wrong_way_driver": {
         "label": "wrong-way driver", "default_area": "a9-freimann",
-        "injects": "1 vehicle drives against the direction of travel on a one-way carriageway; oncoming traffic "
-                   "brakes and switches on hazard lights; wrong-way cameras within 800 m detect it",
+        "injects": "a driver goes against the direction of travel on a one-way carriageway at 100 km/h; carmakers "
+                   "report a wrong-way driver, the position moves; wrong-way cameras within 800 m detect it",
         "areas": "any one-way carriageway of a motorway, trunk or primary road; named: a9-freimann",
     },
     "fog": {
         "label": "reduced visibility (fog)", "default_area": "north",
-        "injects": "vehicles in the area switch on fog lights and slow down; road weather sensors there "
+        "injects": "carmakers report reduced visibility (fog lights on) in the area; road weather sensors there "
                    "report visibility below 150 m",
         "areas": "an area of about 6 x 5 km around any place; named: north (Freimann to the A99)",
     },
     "storm": {
         "label": "exceptional weather (storm)", "default_area": "west-east",
-        "injects": "a storm band about 3 km wide moves from west to east in 20 minutes: wipers at maximum, "
-                   "slower driving",
+        "injects": "a storm band about 3 km wide moves from west to east in 20 minutes; carmakers report "
+                   "exceptional weather (wipers at maximum) where it is",
         "areas": "a band moving across any place (about 10 km); named: west-east (the whole city)",
     },
     "animal": {
         "label": "animal on the road", "default_area": "forstenrieder-park",
-        "injects": "vehicles passing one spot brake hard",
+        "injects": "the navigation service and a carmaker report an animal on the road at one spot",
         "areas": "any road, best along a forest or park; named: forstenrieder-park",
     },
     "debris": {
         "label": "debris on the road", "default_area": "a96",
-        "injects": "vehicles passing one spot swerve and brake hard, some switch on hazard lights",
+        "injects": "a carmaker and the navigation service report an object on the road at one spot",
         "areas": "any road (one direction); named: a96",
     },
     "roadworks": {
         "label": "short-term road works", "default_area": None,
         "injects": "a mobile road works site closes a lane on about 300 m: the road operator's warning trailer "
-                   "reports it, vehicles slow down and some brake hard",
+                   "reports it",
         "areas": "any road (one direction)",
     },
 }
@@ -453,7 +455,7 @@ def locate(kind: str, graph, c, road: str | None = None, near: str | None = None
     else:
         raise ValueError("say where: --road, --near or --at")
     if s.road_class in MINOR:
-        notes.append("a minor street: few probe vehicles pass, detection can take several minutes")
+        notes.append("a minor street: in reality few connected cars pass here, so reports would be rare")
     if kind == "animal" and c is not None:
         ok = c.execute('SELECT COUNT(*) FROM ROAD_DATA.ROAD_AREAS WHERE "kind" IN (\'forest\', \'park\') '
                        'AND ABS("centroid_lat" - {la!f}) < 0.03 AND ABS("centroid_lon" - {lo!f}) < 0.045',
@@ -549,32 +551,19 @@ def build(kind: str, spec: str, graph, c=None) -> Area:
 class Running:
     """A scenario applied by the running simulator."""
 
+    WRONG_WAY_KMH = 100.0
+
     def __init__(self, row: dict, sim):
         self.id = int(row["scenario_id"])
         self.kind = row["scenario_type"]
         self.started_t = (row["started_at"] - sim.t0).total_seconds()
         self.area = resolve(self.kind, row["area"], sim.graph, sim.c)
-        self.special: list = []                     # vehicles taken over by the scenario
         self.rng = random.Random(self.id * 7919)
-        if self.kind == "accident":
-            crash = sim.graph[self.area.start_seg]
-            cands = [v for v in sim.vehicles if sim.dyn[v.provider] and not v.special]
-            first = self.rng.choice(cands)
-            second = self.rng.choice([v for v in cands if v.provider != first.provider])
+        self.ww_path: list = []
+        self.ww_now = None                          # (lon, lat, heading) of the wrong-way driver, None once gone
+        if self.kind == "wrong_way_driver":         # backwards along the carriageway, from the start segment
             fwd = self.area.extra.get("fwd", True)
-            for k, v in enumerate((first, second)):
-                v.special, v.frozen, v.airbag, v.hazard_on = self.id, True, True, True
-                v.seg, v.fwd, v.pos, v.speed, v.target = crash.sid, fwd, crash.length * 0.5 + 8 * k, 0.0, 0.0
-                v.next_report = sim.t                # report at once
-                self.special.append(v)
-        if self.kind == "wrong_way_driver":
-            start = sim.graph[self.area.start_seg]
-            v = self.rng.choice([v for v in sim.vehicles if sim.dyn[v.provider] and v.vtype == "car" and not v.special])
-            v.special, v.wrong = self.id, True
-            v.seg, v.fwd, v.pos = start.sid, False, 0.0      # backwards on a one-way carriageway
-            v.speed = v.target = 100 / 3.6
-            v.next_report = sim.t
-            self.special.append(v)
+            self.ww_path = [(self.area.start_seg, fwd)] + along(sim.graph, self.area.start_seg, fwd, 12000, upstream=True)
         self.trailer = None
         if self.kind == "roadworks":                 # the road operator's warning trailer at the start of the site
             s = sim.graph[self.area.start_seg]
@@ -590,12 +579,22 @@ class Running:
             sim.sensors.append(self.trailer)
 
     def stop(self, sim) -> None:
-        for v in self.special:
-            v.special = 0
-            v.frozen = v.wrong = v.airbag = v.hazard_on = False
-            sim.respawn(v)
         if self.trailer in sim.sensors:
             sim.sensors.remove(self.trailer)         # the site is cleared: the trailer stops reporting
+
+    def move(self, sim, point_at) -> None:
+        """Advance the wrong-way driver to the current simulation time."""
+        if not self.ww_path:
+            return
+        left = (sim.t - self.started_t) * self.WRONG_WAY_KMH / 3.6 + sim.graph[self.ww_path[0][0]].length / 2
+        for sid, fwd in self.ww_path:                # each segment from its downstream end to its upstream end
+            seg = sim.graph[sid]
+            if left <= seg.length:
+                lon, lat, hdg = point_at(seg, fwd, seg.length - left)
+                self.ww_now = (lon, lat, (hdg + 180) % 360)
+                return
+            left -= seg.length
+        self.ww_now = None                           # end of the carriageway: the driver has left the road
 
     def effects(self, sim) -> dict:
         """segment id -> effect for this tick."""
@@ -618,14 +617,7 @@ class Running:
             fx = {"speed": 0.85, "p_slip": 0.15, "capacity": 0.85}
             return {s: fx for s in self.area.segs}
         if k == "wrong_way_driver":
-            out = {}
-            for v in self.special:
-                if not v.wrong:                      # left the road at the end of the carriageway
-                    continue
-                seg = sim.graph[v.seg]
-                for sid in {seg.sid, *sim.graph.into.get(seg.from_node, ())}:
-                    out[sid] = {"p_brake": 0.05, "p_hazard": 0.05}
-            return out
+            return {}
         if k == "fog":
             fx = {"speed": 0.6, "fog": True, "visibility": (60, 140)}
             return {s: fx for s in self.area.segs}
@@ -649,7 +641,7 @@ class Running:
 
     def camera_alarm(self, sensor_pos) -> bool:
         """Wrong-way cameras within 800 m of the wrong-way driver see it."""
-        return any(dist_m(v.lonlat, sensor_pos) <= 800 for v in self.special if v.wrong)
+        return self.ww_now is not None and dist_m(self.ww_now[:2], sensor_pos) <= 800
 
 
 def merge(effects: list[dict]) -> dict:
