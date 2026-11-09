@@ -1,12 +1,17 @@
-# Munich Road Safety: live hazard detection on Exasol
+# Munich Road Safety: a sovereign Data for Road Safety service on Exasol
 
-A live demo of **Data for Road Safety (DFRS)**, the road safety use case of the [Mobility Data Space](docs/context.md): connected vehicles and road sensors report what they notice, and SQL in [Exasol](https://www.exasol.com) turns those signals into confirmed safety warnings on a live map of Munich, within seconds.
+A **reference implementation** for partners of **Data for Road Safety (DFRS)**, the road safety use case of the [Mobility Data Space](docs/context.md), and a live demo of it on a map of Munich.
 
-Say what happens and where, in plain words: *"a wrong-way driver on the A9 southbound near Garching"*, *"an oil spill on Fürstenrieder Straße near Laimer Platz"*. Your AI agent starts the simulated event, and the page shows the signals arriving, the sensors turning red, and the incident being confirmed. Hover over the incident to see the evidence behind it: which vehicles of which providers and which sensors reported it, how fast it was confirmed, and how many vehicles nearby would receive the warning.
+Carmakers, a navigation service and the road operator send safety events and sensor readings through **Apache Kafka**. **Exasol** loads them, combines reports from independent sources into confirmed warnings with SQL, and publishes those back, within seconds. Everything runs on the partner's own machine, built from **free components**: no central platform, no third-party service, and every message in and out on record in one database.
 
-- **Real open data:** the OpenStreetMap road network of Munich and the motorway ring, City of Munich roadworks, Autobahn GmbH motorway events, DWD weather, BASt traffic counts, the accident atlas.
-- **Simulated:** 6,000 connected probe vehicles from seven fictional providers and 158 road sensors, each reporting every few seconds. Every hazard is started on purpose and marked as a simulation.
-- **Detected in SQL:** one rule per SRTI category confirms a hazard from several vehicles, providers and sensors, then computes its reach. The detection never reads which hazards were started.
+Say what happens and where, in plain words: *"an oil spill on the A9 near Freimann, only OEM A sees it"*, *"now a second carmaker reports it"*. Your AI agent starts the simulated event, and the dashboard shows the reports arriving from each provider, the single report staying grey, and the incident being confirmed and published once a second source agrees.
+
+- **Sovereign:** runs on a laptop or the partner's own cloud account (AWS, Azure, Exoscale, STACKIT). Kafka keeps nothing; Exasol keeps everything: what came in, what was confirmed, and what was passed on to whom.
+- **Free:** Exasol Personal, Apache Kafka and Kafbat UI (Apache 2.0), the Exasol Kafka connector, Dash Server and the launcher (MIT), Python, open data.
+- **Open and replaceable:** the Kafka protocol, events in the DATEX II SRTI vocabulary, the rules as plain SQL.
+- **Honest about the data:** the road network, traffic volumes, roadworks, weather and accident history are real open data. The partners, their events and the sensor readings are simulated, because DFRS data isn't open. Every hazard is started on purpose, and the combination never reads which ones were started.
+
+How it is built, what we measured and what is still open: **[docs/architecture.md](docs/architecture.md)**.
 
 ## Get started with your agent
 
@@ -15,32 +20,39 @@ You need macOS or Linux, Python 3.10 or newer, about 12 GB of free disk space (1
 1. Clone this repo and open your agent in it.
 2. Say **"Set up the demo."**
 
-The agent follows [AGENTS.md](AGENTS.md). It installs and starts the database, downloads and loads the open data, creates the simulation, starts Dash Server and deploys the dashboard. It checks each step and asks before installing anything on your machine.
+The agent follows [AGENTS.md](AGENTS.md). It installs and starts the database and the Kafka sidecars, downloads and loads the open data, creates the simulation, starts Dash Server and deploys the dashboard. It checks each step and asks before installing anything on your machine.
 
 Then say **"Start the simulation"** and open <http://127.0.0.1:5100/apps/munich-road-conditions>.
 
 ## What runs where
 
 ```
-open data (OSM, city, Autobahn, DWD, BASt) --prepare_road_data.py--> CSV --load_road_data.sh--> ROAD_DATA
-                                                                                                  |
-simulate_road_safety.py run      ---- vehicle signals, sensor readings every 2 s ---->  ROAD_SAFETY
-simulate_road_safety.py trigger  ---- "start an oil spill here" (SCENARIO_LOG)          |
-                                                                                        |  SQL: hazards, reach,
-Dash Server: munich-road-conditions  <---- read-only (dash_readonly) -----------------  evidence, traffic, diversions
-Your agent  <---- MCP: exasol-personal (SQL), dash-server (dashboard) ----
+ THE OTHER PARTNERS (simulated)            THE PARTNER'S NODE (this repo)
+ ./demo sim run                            ┌──────────────────────────────────────────────────────────┐
+   carmakers, navigation ── SRTI events ──►│ Apache Kafka ──► Exasol: INBOUND_MESSAGES                │
+   road operator ───── sensor readings ───►│ (sidecar)           │ parse, combine (SQL)               │
+ ./demo sim trigger ...                    │                     ▼                                    │
+   "an oil spill here, OEM A sees it"      │ srti.confirmed ◄─ INCIDENTS, OUTBOUND_MESSAGES           │
+                                           │     ▲   ./demo service: load, combine, publish every 3 s │
+                                           │     └── Dash Server: the dashboard (read-only)           │
+                                           └──────────────────────────────────────────────────────────┘
+ open data (OSM, City of Munich, Autobahn, DWD, BASt, Unfallatlas) ──► ROAD_DATA (loaded once)
+ your agent ◄── MCP: exasol-personal (SQL), dash-server (dashboard)
 ```
 
-| Component | What it is |
-|---|---|
-| [Exasol Personal](https://github.com/exasol/exasol-personal) | The database, a local deployment named `road-safety-demo` on 127.0.0.1:8563. Its MCP server (port 4896) lets the agent run SQL |
-| [exapump](https://github.com/exasol-labs/exapump) | Loads the CSVs and runs ad-hoc SQL (profile `road-safety-demo`) |
-| [Dash Server](https://github.com/exasol-labs/dash-server) | Hosts the dashboard on <http://127.0.0.1:5100>; the agent deploys it over MCP |
-| `.venv` | Python for data preparation, the simulator and setup (`requirements.txt`) |
+| Component | What it is | License |
+|---|---|---|
+| [Exasol Personal](https://github.com/exasol/exasol-personal) | The database, a local deployment `road-safety-demo` on 127.0.0.1:8563, with its MCP server (port 4896) | Free; launcher MIT |
+| [Apache Kafka](https://kafka.apache.org) 4.4 | The transport, a sidecar of the deployment (127.0.0.1:19092) | Apache 2.0 |
+| [Kafbat UI](https://github.com/kafbat/kafka-ui) | Topics and messages in the browser, a sidecar (<http://127.0.0.1:18080>) | Apache 2.0 |
+| [Exasol Kafka connector extension](https://github.com/exasol/kafka-connector-extension) | Java UDFs: the database pulls the topics itself | MIT |
+| [Dash Server](https://github.com/exasol-labs/dash-server) | Hosts the dashboard on <http://127.0.0.1:5100>; the agent deploys it over MCP | MIT |
+| [exapump](https://github.com/exasol-labs/exapump) | Loads the open data and runs ad-hoc SQL (profile `road-safety-demo`) | MIT |
+| `.venv` | Python for the scripts (`requirements.txt`: pyexasol, kafka-python, ...) | MIT, Apache 2.0, ... |
 
 ## Set up by hand
 
-The same steps your agent runs. Commands are run from the repo folder.
+The same steps your agent runs, from the repo folder. `./demo <name>` starts a script with the project's Python (`./demo help` lists the names).
 
 ```bash
 # 1. Database: install the Exasol Personal launcher (https://github.com/exasol/exasol-personal), then
@@ -49,50 +61,55 @@ exasol mcp enable -d road-safety-demo
 
 # 2. Python and exapump (https://github.com/exasol-labs/exapump)
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python scripts/setup_access.py          # creates the exapump profile road-safety-demo
+./demo access                      # creates the exapump profile road-safety-demo
 
-# 3. Open data: download and prepare (data/road-data), then load into ROAD_DATA
-.venv/bin/python scripts/prepare_road_data.py
-scripts/load_road_data.sh
+# 3. Kafka: sidecars, the connector JAR in BucketFS, Java for UDFs, the UDF scripts
+./demo kafka                       # then do what it prints: exasol start (or stop + start for Java)
 
-# 4. Simulation: schema ROAD_SAFETY, vehicles, sensors, detection views
-.venv/bin/python scripts/simulate_road_safety.py setup
-.venv/bin/python scripts/simulate_road_safety.py views
-.venv/bin/python scripts/setup_access.py          # again: now also creates the read-only dashboard user
+# 4. Open data: download and prepare (data/road-data), then load into ROAD_DATA
+./demo prepare
+./demo load
 
-# 5. Dash Server, cloned next to this repo
+# 5. Simulation: providers and sensors, the live view; then the read-only dashboard user
+./demo sim setup
+./demo sim views
+./demo access
+
+# 6. Dash Server, cloned next to this repo
 git clone https://github.com/exasol-labs/dash-server ../dash-server
 (cd ../dash-server && python3 -m venv .venv && .venv/bin/pip install -e .)
-scripts/start_dash_server.sh                      # keep it running
+./demo dash                        # keep it running
 
-# 6. Dashboard: ask your agent to "deploy the dashboard" (Dash Server MCP; see AGENTS.md)
+# 7. Dashboard: ask your agent to "deploy the dashboard" (Dash Server MCP; see AGENTS.md)
 ```
 
 ## Run the demo
 
 ```bash
-.venv/bin/python scripts/simulate_road_safety.py run --start 07:30 --speed 3 --log events   # keep it running
-.venv/bin/python scripts/simulate_road_safety.py trigger wrong_way_driver --road A9 --near Garching-Süd --direction south
-.venv/bin/python scripts/simulate_road_safety.py trigger oil_spill --road "Fürstenrieder Straße" --near "Laimer Platz"
-.venv/bin/python scripts/simulate_road_safety.py stop-all
+./demo service                                          # keep it running: load, combine, publish
+./demo sim run --start 07:30 --speed 3 --log events     # keep it running: the partners
+./demo sim trigger oil_spill --road A9 --near Freimann --providers OEM_A     # one source: stays a single report
+./demo sim trigger oil_spill --providers OEM_A,OEM_D                         # a second source: confirmed, published
+./demo sim trigger oil_spill --stop
 ```
 
-On stage you don't type these: you tell the agent what happens and where, and it explains the simulation, runs the trigger and reports what the SQL detected. Event types: `wrong_way_driver`, `accident`, `slippery_road` (ice), `oil_spill`, `debris`, `animal`, `roadworks`, `fog`, `storm`. `scenarios` lists them with the places they fit. See [AGENTS.md](AGENTS.md#running-the-demo) for the flow.
+On stage you don't type these: you tell the agent what happens and where, and it explains the simulation and runs the trigger. Event types: `wrong_way_driver`, `accident`, `slippery_road` (ice), `oil_spill`, `debris`, `animal`, `roadworks`, `fog`, `storm`; `./demo sim scenarios` lists them with the places they fit and who reports them. See [AGENTS.md](AGENTS.md#running-the-demo) for the flow.
 
 ## Repo layout
 
 | Path | Content |
 |---|---|
 | `AGENTS.md` | Instructions for the agent: setup, demo rules, troubleshooting |
+| `demo` | Starts the scripts by a short name |
 | `dashboard/` | The Dash app `munich-road-conditions`: `app.py` and its SQL in `queries/` |
-| `roadsafety/` | SQL templates: schema, hazard detection, reach, evidence, traffic, diversions (with a Python routing UDF) |
-| `scripts/` | `prepare_road_data.py`, `load_road_data.sh`, `simulate_road_safety.py` (with `road_scenarios.py`, `road_traffic.py`), `build_dashboard_queries.py`, `setup_access.py`, `start_dash_server.sh` |
+| `roadsafety/` | SQL: `combine.sql` (the rule), `parse.sql`, the schemas, the Kafka connector scripts |
+| `scripts/` | `road_safety_service.py` (the service), `kafka_loader.py`, `setup_kafka.py`, `simulate_road_safety.py` (with `srti_events.py`, `road_scenarios.py`, `road_traffic.py`), `prepare_road_data.py`, `load_road_data.sh`, `setup_access.py`, `build_dashboard_queries.py`, `start_dash_server.sh` |
 | `data/source/` | Small inputs kept in git: city districts, city roadworks, congestion hotspots |
 | `research/` | The open data sources with licenses and limits; the Munich congestion hotspots |
-| `docs/` | [context.md](docs/context.md): the Mobility Data Space and DFRS. [plan.md](docs/plan.md): the design and how it evolved |
+| `docs/` | [architecture.md](docs/architecture.md): how it is built and why. [context.md](docs/context.md): the Mobility Data Space and DFRS. [plan.md](docs/plan.md): the design and how it evolved |
 
 ## Data and licenses
 
 Road network © OpenStreetMap contributors (ODbL 1.0). City districts and roadworks: Landeshauptstadt München (dl-de/by-2.0). Motorway events © Die Autobahn GmbH des Bundes (GeoNutzV). Weather: Deutscher Wetterdienst (CC BY 4.0). Traffic counts: Bundesanstalt für Straßenwesen (CC BY 4.0). Accident atlas: Statistische Ämter des Bundes und der Länder (dl-de/by-2.0). Details per dataset in [research/road-data-sources.md](research/road-data-sources.md).
 
-The vehicles, providers and sensors are fictional. No real vehicle data is used.
+The carmakers, providers, their events and the sensor readings are fictional. No real vehicle or DFRS data is used.

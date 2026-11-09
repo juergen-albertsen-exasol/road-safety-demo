@@ -2,11 +2,11 @@
 
 This is the working plan the demo was built from, kept as its design record. How to set up and run the demo is in [README.md](../README.md) and [AGENTS.md](../AGENTS.md); the background on the Mobility Data Space and DFRS is in [context.md](context.md).
 
-Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: steps 2 to 6 done, step 7 (docs, deck) open.
+Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: steps 2 to 7 done.
 
 ## Revision 2026-11-09: a reference implementation for DFRS partners
 
-**Status: in progress.** Done (2026-11-09): steps 2 to 6. The demo runs end to end again: partners send SRTI events through Kafka, `scripts/road_safety_service.py` loads, combines and publishes them, the dashboard shows it. Open: step 7 (README, `docs/context.md`, the deck) and a real DFRS sample (step 1).
+**Status: built** (2026-11-09): steps 2 to 7. The demo runs end to end: partners send SRTI events through Kafka, `scripts/road_safety_service.py` loads, combines and publishes them, the dashboard shows it; README, `docs/architecture.md` and the deck explain it. Open: a real DFRS sample (step 1), clearing by absence, and the service as a sidecar of the deployment.
 
 ### The pitch
 
@@ -164,7 +164,7 @@ Not run in iteration 1: heavy, invisible on stage, and it needs an MDS identity.
    - Tested live: one provider stays a single report; a second confirms it (10 s after its first report); stop clears it; the wrong-way driver moves and clears when gone; the accident becomes an unmanaged blockage after 10 min; road works confirmed by the trailer alone; false alarms never confirmed; restart republishes.
    - Not done: clearing by absence (providers passing the spot without reporting it). Incidents clear when no valid report is left (cancel or expiry).
 6. Dashboard: events by provider, outbound ticker, offers panel, traffic volume background. **Done** (2026-11-09): map with the valid events as dots in the provider's colour (grey: single reports, not confirmed), road sensors, confirmed incidents with their evidence, reach and published id; background: traffic volume per main road at the simulated hour; incident cards; the outbound ticker; offers and contracts; sliders for the providers needed and whether a sensor may replace one (what-if: the service keeps the default rule); an event stream tab with every message, classed. The queues, diversions and probe-speed traffic state of the raw-signal version are gone.
-7. Docs: README (the pitch), `docs/context.md` (the mapping table and "what the demo doesn't show"), AGENTS.md (setup table, troubleshooting), the deck (setup, detection, a slide "what you receive and what you send", the iterations).
+7. Docs: README (the pitch), `docs/context.md` (the mapping table and "what the demo doesn't show"), AGENTS.md (setup table, troubleshooting), the deck (setup, detection, a slide "what you receive and what you send", the iterations). **Done** for the repo (2026-11-09): README (the pitch: sovereign, free components), the new `docs/architecture.md` (the node, data flow, licenses, restarts, measurements, limits), `docs/context.md` (the mapping table, what the demo doesn't show), AGENTS.md. The deck is updated separately.
 
 ### Open questions
 

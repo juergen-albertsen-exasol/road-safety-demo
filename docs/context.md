@@ -1,6 +1,6 @@
 # Context: the Mobility Data Space and Data for Road Safety
 
-This demo shows, on a live map of Munich, how safety-related traffic information is created from vehicle and road sensor data. It follows the **Data for Road Safety (DFRS)** use case of the **Mobility Data Space (MDS)**. This page summarises the background from the MDS presentation "Mobility Data Space" (DRM Datenraum Mobilität GmbH, 29 October 2026) and explains how the demo maps to it.
+This demo is a reference implementation of the service a Data for Road Safety partner runs: it receives safety events from several carmakers and the road operator, confirms them by combining independent sources, and publishes confirmed warnings, shown on a live map of Munich. It follows the **Data for Road Safety (DFRS)** use case of the **Mobility Data Space (MDS)**. This page summarises the background from the MDS presentation "Mobility Data Space" (DRM Datenraum Mobilität GmbH, 29 October 2026) and explains how the demo maps to it.
 
 ## The Mobility Data Space
 
@@ -47,14 +47,16 @@ Technically, every member runs a connector (EDC). The MDS authority provides the
 
 | DFRS / MDS | In the demo |
 |---|---|
-| Carmakers and service providers sharing vehicle events | Six fictional carmakers (OEM A–F) and a navigation service, each with its own fleet of connected *probe vehicles*. Generic names on purpose: no real brand data is behind them. Not every provider shares every signal, so a hazard often needs more than one provider to be confirmed |
+| Carmakers and service providers sharing events from their own backends | Six fictional carmakers (OEM A–F) and a navigation service. Each detects hazards itself and shares only the finished SRTI event (category, position, direction, time, validity, confidence), never raw vehicle data or positions. Not every provider can detect everything: the navigation service has no airbag or ESC data, two carmakers have no environment sensors. Generic names on purpose: no real brand data is behind them |
 | Road authorities sharing infrastructure data | A road operator with 158 virtual sensors at real places: road weather stations on bridges, wrong-way cameras at motorway entries, tunnel cameras, loop detectors, and warning trailers at short-term road works |
-| The event streams (Kafka) | The simulator writes the vehicle signals and sensor readings into Exasol in micro-batches every 2 seconds (schema `ROAD_SAFETY`) |
-| The eight SRTI categories | Used one to one: every incident on the map is one of them |
-| A service provider that turns raw events into safety information | SQL in Exasol: rules per category confirm a hazard from several vehicles, providers and sensors within a radius and a time window, give it a confidence, and keep the evidence chain |
-| Maximising the reach | For every incident the SQL counts the vehicles within 2 km heading towards it, the ones that would receive the warning |
-| Data catalogue, open mobility data | The background is real open data: OpenStreetMap road network, City of Munich roadworks, Autobahn GmbH motorway events, DWD weather, BASt traffic counts, the accident atlas |
+| The event streams through the Kafka extension | One Apache Kafka topic per provider (`srti.oem-a` … `srti.nav`, `datex.road-operator`), Kafka running beside the database. Exasol pulls the topics itself with the Exasol Kafka connector |
+| The eight SRTI categories | Used one to one, with the DATEX II record types real SRTI feeds use |
+| A service provider that turns events into safety information | SQL in Exasol combines reports of the same category, place and direction: confirmed by two different providers, or one provider plus a road operator sensor, or the road operator alone for road works and wrong-way cameras. A single report is never passed on |
+| Maximising the reach | Every confirmed incident is published as a warning to the topic `srti.confirmed`, with the vehicles it reaches, estimated from the traffic volume on the open data |
+| Data sovereignty, decentralisation | The whole service runs on the partner's own machine or cloud account, from free components. Data rests only in the partner's Exasol: what came in, what was confirmed, and what was passed on to whom (`INBOUND_MESSAGES`, `INCIDENTS`, `OUTBOUND_MESSAGES`), queryable with SQL |
+| Catalogue and contracts | The dashboard lists the data offers this partner uses and makes, with their usage policies (metadata only, not enforced) |
+| Open mobility data | The background is real open data: OpenStreetMap road network, City of Munich roadworks, Autobahn GmbH motorway events, DWD weather, BASt traffic counts, the accident atlas |
 
-**What the demo doesn't show:** connectors, the Kafka extension, identity, usage policies or the logging house. The demo starts where the data has arrived in a participant's backend, and shows what that participant can do with it in a database.
+**What the demo doesn't show (yet):** the EDC connector, identity (DAPS), enforced usage policies and the logging house. In iteration 1 the other partners are simulated and write straight into Kafka; the demo starts where the events reach the partner's node. Iteration 2 puts an EDC connector with the Kafka extension in front of the same topics, connected to the MDS test environment. Details: [architecture.md](architecture.md).
 
-**What is real and what is simulated.** The road network, roadworks, motorway events, weather, traffic volumes and accident history are real open data. The vehicle and sensor signals are synthetic, because no open source of raw vehicle signals exists and DFRS data isn't published under an open license. The presenter starts every hazard on purpose, and the page always shows that it is simulated. The detection SQL never reads which hazards were started: it finds them only from the signals.
+**What is real and what is simulated.** The road network, roadworks, motorway events, weather, traffic volumes and accident history are real open data. The partners, their events and the sensor readings are synthetic, because DFRS data isn't published under an open license. The event format follows the DATEX II SRTI profile until a real DFRS sample is available. The presenter starts every hazard on purpose, and the page always shows that it is simulated. Besides the triggered hazards, single providers now and then report something that didn't happen (false alarms); the combination must never confirm them. The combination SQL never reads which hazards were started: it finds them only from what the partners send.
