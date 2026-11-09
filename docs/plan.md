@@ -2,11 +2,11 @@
 
 This is the working plan the demo was built from, kept as its design record. How to set up and run the demo is in [README.md](../README.md) and [AGENTS.md](../AGENTS.md); the background on the Mobility Data Space and DFRS is in [context.md](context.md).
 
-Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is planned, not built.
+Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: step 2 (Redpanda sidecar) done.
 
 ## Revision 2026-11-09: a reference implementation for DFRS partners
 
-**Status: planned.**
+**Status: in progress.** Done: step 2 (Redpanda and Console as sidecars, `scripts/setup_kafka.py`).
 
 ### The pitch
 
@@ -97,7 +97,9 @@ A scheduled step (every few seconds, run by the loader or a Lua script) turns th
 - Optional second sidecar **Redpanda Console** (web UI on a loopback port): shows the topics and the messages arriving. Useful on stage ("here is what the carmakers send"); same license.
 - Added as a user entry `redpanda` in the deployment's `sidecars.yaml`. This is documented and supported in the launcher (`user-docs/content/sidecars.md` in exasol-personal): saved definitions are authoritative, user-added entries count as enabled, `exasol start -d road-safety-demo` starts them, `exasol sidecar status redpanda` reports them. `exasol sidecar enable` only accepts catalog names, so setup edits the file instead.
 - Networking: the database reaches the broker as `redpanda:9092` inside the deployment network; the simulator on the laptop uses the published port `127.0.0.1:19092`. Two listeners, each advertised with its own address. Readiness: a `tcpSocket` probe on the published port.
-- On macOS the sidecar runs in the database VM and takes memory from it.
+- On macOS the sidecar runs in the database VM and takes memory from it. Measured on 2026-11-09: Redpanda about 290 MB, Console about 50 MB, in a VM with 24 GB and 2 CPUs (the database used about 2 GB at the time).
+- Images from `docker.io/redpandadata/` (`redpanda:v26.2.6`, `console:v3.13.1`), not `docker.redpanda.com`: that front hit Docker Hub's anonymous pull limit while `docker.io` worked.
+- Python client on the laptop: `kafka-python` (pure Python). `confluent-kafka` has no stable wheel for Python 3.15 yet.
 - **Loading into Exasol:** the Exasol Kafka connector extension (MIT, `exasol/kafka-connector-extension`; Java `SET` scripts `KAFKA_CONSUMER`, `KAFKA_IMPORT`, `KAFKA_METADATA`, the JAR in BucketFS; imports in batches every few seconds). It keeps no state of its own: the target table has the columns `KAFKA_PARTITION` and `KAFKA_OFFSET`, and each import continues after the highest offset per partition found there. Lower `POLL_TIMEOUT_MS` (default 30 s) so a run with few messages returns quickly. Fallback if it doesn't run on Exasol Personal: a small Python consumer in `scripts/` that loads micro-batches with pyexasol. Either way the loader keeps its position in Exasol, not in Redpanda (see the next section).
 - **Topic names carry the run id** (`srti.oem-a.<run>`, `srti.confirmed.<run>`): after a restart the topics are recreated empty at offset 0, while `SRTI_EVENTS` still holds higher offsets from the last run. A connector resuming from those would skip every new message. With the run id in the name, a new topic has no rows yet, so loading starts at 0. The architecture sketch shows the topics without the suffix.
 
@@ -157,12 +159,12 @@ Checked on 2026-11-09:
 - **Offsets in the Kafka connector:** read from the target table (`KAFKA_PARTITION`, `KAFKA_OFFSET`); no reset option. Solved by the run id in the topic names (see "Kafka").
 - **Redpanda's license:** fine for partners running it for their own service (see "Kafka"). A legal sign-off is still sensible.
 - **EDC state (iteration 2):** in memory by default; SQL stores are PostgreSQL only. See "Connector".
+- **Memory in the macOS VM:** no problem, see "Kafka" (measured in step 2).
 
 Still open:
 
 - The real DFRS event format and fields: no public sample; ask MDS. Until then, model on Digitraffic's SRTI messages.
 - Does the Kafka connector extension run on Exasol Personal (Java UDFs, the JAR in BucketFS)? Nothing in the docs speaks against it; test in step 3.
-- Memory: Redpanda (about 1 GB) and optionally Console next to the database in the macOS VM; measure in step 2.
 - Latency: event delays plus Kafka plus batch loading; on stage the confirmation should come within about a minute of the trigger. Measure in steps 3 and 5.
 
 ## Revision 2026-11-07: safety events anywhere, derived from sensors

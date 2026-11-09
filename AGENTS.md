@@ -24,15 +24,16 @@ When the user says "set up the demo" (or similar), work through these steps in o
 | 1 | `exasol version` works | Ask to install the Exasol Personal launcher: <https://github.com/exasol/exasol-personal> (release binary for the platform, on the PATH) |
 | 2 | `exasol status -d road-safety-demo` says running | Not installed: `exasol install local -d road-safety-demo` (takes several minutes, needs about 10 GB). Stopped: `exasol start -d road-safety-demo` |
 | 3 | `exasol mcp status -d road-safety-demo` serves on port 4896 | `exasol mcp enable -d road-safety-demo` |
-| 4 | `exapump --version` works | Ask to install exapump: <https://github.com/exasol-labs/exapump> |
-| 5 | `.venv/bin/python -c "import osmium, shapely, pyexasol"` works | `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` |
-| 6 | `exapump profile show road-safety-demo` works | `.venv/bin/python scripts/setup_access.py` (creates the profile; warns that the schemas don't exist yet, which is fine here) |
-| 7 | `ROAD_DATA` has 15 tables with rows: `SELECT TABLE_NAME, TABLE_ROW_COUNT FROM EXA_ALL_TABLES WHERE TABLE_SCHEMA = 'ROAD_DATA'` | `.venv/bin/python scripts/prepare_road_data.py` (downloads about 600 MB into `~/.cache/munich-road-data`, writes `data/road-data/`), then `scripts/load_road_data.sh`. Run it in the background and report progress |
-| 8 | `.venv/bin/python scripts/simulate_road_safety.py status` shows vehicles and the views exist (`ROAD_SAFETY.V_HAZARD_REACH`) | `simulate_road_safety.py setup`, then `simulate_road_safety.py views` |
-| 9 | User `DASH_READONLY` exists (`EXA_DBA_USERS`) and `secrets/dash_readonly_password` exists | `.venv/bin/python scripts/setup_access.py` |
-| 10 | Dash Server answers on <http://127.0.0.1:5100> | Ask to clone and install it next to this repo: `git clone https://github.com/exasol-labs/dash-server ../dash-server && (cd ../dash-server && python3 -m venv .venv && .venv/bin/pip install -e .)`. Then start it in the background: `scripts/start_dash_server.sh` |
-| 11 | The `dash-server` and `exasol-personal` MCP tools are available in this session | Both are registered in `.mcp.json`. The client loads them at start: ask the user to restart the session (Claude Code: approve the project MCP servers when asked), then continue from here |
-| 12 | `apps_list` shows `munich-road-conditions` | Deploy the dashboard, see below |
+| 4 | `exasol sidecar status -d road-safety-demo` shows `redpanda` (127.0.0.1:19092) and `redpanda-console` (<http://127.0.0.1:18080>) serving | `.venv/bin/python scripts/setup_kafka.py`, then `exasol start -d road-safety-demo` (adds them to the deployment's `sidecars.yaml`; the running database is left alone). Topics are empty after every start: Exasol keeps the data |
+| 5 | `exapump --version` works | Ask to install exapump: <https://github.com/exasol-labs/exapump> |
+| 6 | `.venv/bin/python -c "import osmium, shapely, pyexasol, kafka"` works | `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` |
+| 7 | `exapump profile show road-safety-demo` works | `.venv/bin/python scripts/setup_access.py` (creates the profile; warns that the schemas don't exist yet, which is fine here) |
+| 8 | `ROAD_DATA` has 15 tables with rows: `SELECT TABLE_NAME, TABLE_ROW_COUNT FROM EXA_ALL_TABLES WHERE TABLE_SCHEMA = 'ROAD_DATA'` | `.venv/bin/python scripts/prepare_road_data.py` (downloads about 600 MB into `~/.cache/munich-road-data`, writes `data/road-data/`), then `scripts/load_road_data.sh`. Run it in the background and report progress |
+| 9 | `.venv/bin/python scripts/simulate_road_safety.py status` shows vehicles and the views exist (`ROAD_SAFETY.V_HAZARD_REACH`) | `simulate_road_safety.py setup`, then `simulate_road_safety.py views` |
+| 10 | User `DASH_READONLY` exists (`EXA_DBA_USERS`) and `secrets/dash_readonly_password` exists | `.venv/bin/python scripts/setup_access.py` |
+| 11 | Dash Server answers on <http://127.0.0.1:5100> | Ask to clone and install it next to this repo: `git clone https://github.com/exasol-labs/dash-server ../dash-server && (cd ../dash-server && python3 -m venv .venv && .venv/bin/pip install -e .)`. Then start it in the background: `scripts/start_dash_server.sh` |
+| 12 | The `dash-server` and `exasol-personal` MCP tools are available in this session | Both are registered in `.mcp.json`. The client loads them at start: ask the user to restart the session (Claude Code: approve the project MCP servers when asked), then continue from here |
+| 13 | `apps_list` shows `munich-road-conditions` | Deploy the dashboard, see below |
 
 At the end, give the URL <http://127.0.0.1:5100/apps/munich-road-conditions> and say how to start the simulation.
 
@@ -98,4 +99,5 @@ Sources, licenses and limits: [research/road-data-sources.md](research/road-data
 | The dashboard page shows an error, while the healthcheck is fine | The healthcheck doesn't run callbacks: read `app_tail_logs` |
 | "license limit of 20 parallel connections", or a git conflict in Dash Server | Wait a few seconds and retry once |
 | A trigger is never confirmed | Check that the simulator runs and that vehicles pass the spot (quiet side streets have few). Look at `VEHICLE_SIGNALS` near the spot since the trigger |
+| A sidecar fails with `toomanyrequests: You have reached your unauthenticated pull rate limit` | Pull from `docker.io/redpandadata/...`, not `docker.redpanda.com` (that front hits Docker Hub's anonymous limit). `scripts/setup_kafka.py` already does |
 | pyexasol bulk import fails on the version string of Exasol Personal | Known; the simulator uses multi-row INSERTs instead. Don't switch it to `import_from_iterable` |

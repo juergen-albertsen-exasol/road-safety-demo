@@ -1,5 +1,6 @@
-# Python for the data preparation, the simulator and the setup script (project .venv).
+# Python for the data preparation, the simulator, the Kafka client and the setup scripts (project .venv).
 # The dashboard's own requirements are in dashboard/requirements.txt; Dash Server installs them.
+kafka-python==3.0.13
 numpy==2.5.4
 osmium==4.3.2
 pyexasol==1.3.0
