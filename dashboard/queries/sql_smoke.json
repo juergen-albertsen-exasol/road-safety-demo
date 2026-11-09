@@ -1,76 +1,25 @@
 {
-  "queries/hazards_live.sql": {
-    "window_min": 15,
-    "min_vehicles": 3,
+  "queries/incidents_live.sql": {
     "min_providers": 2,
+    "sensor_replaces": 1,
+    "window_min": 30,
+    "heading_max": 60,
     "friction_max": 0.4,
+    "visibility_max": 150,
     "blockage_after_s": 600,
-    "clear_vehicles": 5,
-    "reach_m": 2000,
-    "toward_deg": 60
+    "reach_min": 10
   },
-  "queries/traffic_state.sql": {
-    "now_min": 5,
-    "before_min": 10,
-    "slow": 0.7,
-    "congested": 0.4,
-    "standstill": 0.15
+  "queries/events_now.sql": {
+    "window_min": 30
   },
-  "queries/congestion.sql": {
-    "now_min": 5,
-    "before_min": 10,
-    "slow": 0.7,
-    "congested": 0.4,
-    "standstill": 0.15,
-    "merge_m": 1500
+  "queries/event_stream.sql": {
+    "minutes": 5,
+    "max_rows": 100
   },
-  "queries/diversions.sql": {
-    "now_min": 5,
-    "before_min": 10,
-    "slow": 0.7,
-    "congested": 0.4,
-    "standstill": 0.15
-  },
-  "queries/main_segments.sql": {
-    "first_id": 1,
-    "last_id": 100
-  },
-  "queries/segments.sql": {
-    "ids": "1, 2"
+  "queries/outbound.sql": {
+    "max_rows": 14
   },
   "queries/hotspots.sql": {
     "min_accidents": 15
-  },
-  "queries/traffic_view.sql": {
-    "lat_min": 48.1,
-    "lat_max": 48.2,
-    "lon_min": 11.45,
-    "lon_max": 11.65,
-    "now_min": 5,
-    "slow": 0.7,
-    "congested": 0.4,
-    "standstill": 0.15
-  },
-  "queries/vehicles.sql": {
-    "lat_min": 48.0,
-    "lat_max": 48.3,
-    "lon_min": 11.3,
-    "lon_max": 11.9
-  },
-  "queries/hazard_evidence.sql": {
-    "window_min": 15,
-    "min_vehicles": 3,
-    "min_providers": 2,
-    "friction_max": 0.4,
-    "blockage_after_s": 600,
-    "clear_vehicles": 5
-  },
-  "queries/signal_stream.sql": {
-    "seconds": 60,
-    "max_rows": 100,
-    "vehicles": 1,
-    "sensors": 1,
-    "only_events": 0,
-    "evidence_ids": "'-'"
   }
 }

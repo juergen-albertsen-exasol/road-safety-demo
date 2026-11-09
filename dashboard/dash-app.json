@@ -2,7 +2,7 @@
   "name": "munich-road-conditions",
   "title": "Munich Road Conditions",
   "route": "/apps/munich-road-conditions",
-  "description": "Live road conditions in Munich: hazards confirmed from (simulated) connected vehicles and road sensors, in the spirit of Data for Road Safety.",
+  "description": "Live road conditions in Munich: incidents confirmed from the SRTI events of several (simulated) carmakers and the road operator's sensors, as in Data for Road Safety.",
   "template": "exasol-analytics",
   "data_sources": {
     "primary": {

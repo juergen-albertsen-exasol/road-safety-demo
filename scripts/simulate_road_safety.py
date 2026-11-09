@@ -1051,44 +1051,23 @@ def scenarios(args) -> None:
               f"{'':18s} injects: {v['injects']}\n{'':18s} {describe_steering(k, None)}\n")
 
 
-HAZARD_DEFAULTS = {"window_min": 15, "min_vehicles": 3, "min_providers": 2, "friction_max": 0.4,
-                   "blockage_after_s": 600, "clear_vehicles": 5}
-REACH_DEFAULTS = {"reach_m": 2000, "toward_deg": 60}
-TRAFFIC_DEFAULTS = {"now_min": 5, "before_min": 10, "slow": 0.7, "congested": 0.4, "standstill": 0.15}
-CONGESTION_DEFAULTS = {"merge_m": 1500}
-
-
-def render(c, name: str, **params) -> str:
-    """Fill a roadsafety/*.sql template with pyexasol placeholders."""
-    return c.format.format((ROOT / "roadsafety" / f"{name}.sql").read_text(), **params).strip().rstrip(";")
+COMBINE_DEFAULTS = {"min_providers": 2, "sensor_replaces": 1, "window_min": 30, "heading_max": 60, "friction_max": 0.4,
+                    "visibility_max": 150, "blockage_after_s": 600, "reach_min": 10}
+OLD_VIEWS = ["V_HAZARDS_LIVE", "V_HAZARD_EVIDENCE", "V_HAZARD_REACH", "V_TRAFFIC_STATE", "V_CONGESTION",
+             "V_CONGESTION_WARNINGS", "V_DIVERSIONS"]
 
 
 def views(args) -> None:
-    """The detection views of the raw-signal version (VEHICLE_SIGNALS). Replaced by the combination SQL in step 5
-    of the 2026-11-09 revision; kept until then so the dashboard still loads."""
+    """V_INCIDENTS_LIVE: the combination (roadsafety/combine.sql) with the default rule, for questions in SQL.
+    Drops the views and the routing UDF of the raw-signal version."""
     c = connect(args.deployment)
-    hazards = render(c, "hazards", **HAZARD_DEFAULTS)
-    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_HAZARDS_LIVE AS\n{hazards}")
-    sys.path.insert(0, str(ROOT / "scripts"))
-    from build_dashboard_queries import compose_after_hazards
-    evidence = compose_after_hazards((ROOT / "roadsafety" / "hazards.sql").read_text(),
-                                     (ROOT / "roadsafety" / "evidence.sql").read_text())
-    c.execute("CREATE OR REPLACE VIEW ROAD_SAFETY.V_HAZARD_EVIDENCE AS\n"
-              + c.format.format(evidence, **HAZARD_DEFAULTS).strip().rstrip(";"))
-    reach = render(c, "reach", hazards_sql="SELECT * FROM ROAD_SAFETY.V_HAZARDS_LIVE", **REACH_DEFAULTS)
-    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_HAZARD_REACH AS\n{reach}")
-    traffic = render(c, "traffic", **TRAFFIC_DEFAULTS)
-    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_TRAFFIC_STATE AS\n{traffic}")
-    congestion = render(c, "congestion", traffic_sql="SELECT * FROM ROAD_SAFETY.V_TRAFFIC_STATE", **CONGESTION_DEFAULTS)
-    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_CONGESTION AS\n{congestion}")
-    warnings = render(c, "warnings", traffic_sql="SELECT * FROM ROAD_SAFETY.V_TRAFFIC_STATE")
-    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_CONGESTION_WARNINGS AS\n{warnings}")
-    udf = (ROOT / "roadsafety" / "diversions_udf.sql").read_text()
-    c.execute(udf[udf.index("CREATE OR REPLACE"):].rstrip().rstrip("/").rstrip())
-    diversions = render(c, "diversions", traffic_sql="SELECT * FROM ROAD_SAFETY.V_TRAFFIC_STATE")
-    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_DIVERSIONS AS\n{diversions}")
-    c.execute("GRANT EXECUTE ON SCHEMA ROAD_SAFETY TO dash_readonly")
-    print("Views of the raw-signal version created (they read VEHICLE_SIGNALS, which the simulator no longer writes)")
+    for v in OLD_VIEWS:
+        c.execute(f"DROP VIEW IF EXISTS ROAD_SAFETY.{v}")
+    c.execute("DROP SCRIPT IF EXISTS ROAD_SAFETY.DIVERSIONS")
+    sql = c.format.format((ROOT / "roadsafety" / "combine.sql").read_text(), **COMBINE_DEFAULTS).strip().rstrip(";")
+    c.execute(f"CREATE OR REPLACE VIEW ROAD_SAFETY.V_INCIDENTS_LIVE AS\n{sql}")
+    print("View ROAD_SAFETY.V_INCIDENTS_LIVE created (combine.sql with "
+          + ", ".join(f"{k}={v}" for k, v in COMBINE_DEFAULTS.items()) + ")")
 
 
 def status(args) -> None:
@@ -1131,7 +1110,7 @@ def main() -> int:
     p.add_argument("--verbose", action="store_true")
     p.add_argument("--log", nargs="?", const="all", choices=["all", "events"],
                    help="print every message sent (all) or leave out routine sensor readings (events)")
-    sub.add_parser("views", help="(raw-signal version) create the old detection views")
+    sub.add_parser("views", help="create V_INCIDENTS_LIVE (the combination with the default rule)")
     sub.add_parser("status", help="show the current run and message counts")
     p = sub.add_parser("trigger", help="inject a scenario into the running simulation (visibly), or steer it")
     p.add_argument("scenario", type=lambda k: rs.ALIASES.get(k.lower().replace("-", "_"), k.lower().replace("-", "_")),

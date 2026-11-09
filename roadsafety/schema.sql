@@ -20,15 +20,9 @@ CREATE OR REPLACE TABLE ROAD_SAFETY.DATA_PROVIDERS (
     PRIMARY KEY ("provider_id")
 );
 
--- VEHICLES and VEHICLE_SIGNALS belong to the raw-signal version: the simulator no longer writes them
--- (since 2026-11-09). They stay until the combination SQL and the dashboard no longer read them.
-CREATE OR REPLACE TABLE ROAD_SAFETY.VEHICLES (
-    "vehicle_id"       DECIMAL(9,0) NOT NULL,
-    "provider_id"      VARCHAR(20) NOT NULL,
-    "vehicle_type"     VARCHAR(20) NOT NULL,      -- car, van, truck, bus
-    "home_segment_id"  DECIMAL(9,0),              -- where the vehicle started
-    PRIMARY KEY ("vehicle_id")
-);
+-- The raw-signal version (until 2026-11-09) had VEHICLES and VEHICLE_SIGNALS: gone, partners share events.
+DROP TABLE IF EXISTS ROAD_SAFETY.VEHICLE_SIGNALS;
+DROP TABLE IF EXISTS ROAD_SAFETY.VEHICLES;
 
 -- Virtual sensors at real places taken from OSM (ROAD_DATA.ROAD_SEGMENTS).
 CREATE OR REPLACE TABLE ROAD_SAFETY.INFRA_SENSORS (
@@ -41,29 +35,6 @@ CREATE OR REPLACE TABLE ROAD_SAFETY.INFRA_SENSORS (
     "lat"              DOUBLE,
     "lon"              DOUBLE,
     PRIMARY KEY ("sensor_id")
-);
-
--- Raw vehicle stream. Each vehicle reports every 10 s of simulation time, and at once on an event
--- (hard braking, ESC/ABS, airbag). NULL means the provider doesn't share that signal.
-CREATE OR REPLACE TABLE ROAD_SAFETY.VEHICLE_SIGNALS (
-    "run_id"           DECIMAL(9,0) NOT NULL,
-    "ts"               TIMESTAMP NOT NULL,
-    "vehicle_id"       DECIMAL(9,0) NOT NULL,
-    "provider_id"      VARCHAR(20) NOT NULL,
-    "lat"              DOUBLE NOT NULL,
-    "lon"              DOUBLE NOT NULL,
-    "segment_id"       DECIMAL(9,0) NOT NULL,
-    "heading_deg"      DECIMAL(4,0),
-    "speed_kmh"        DECIMAL(4,0),
-    "esc_active"       BOOLEAN,
-    "abs_active"       BOOLEAN,
-    "hard_braking"     BOOLEAN,
-    "hazard_lights"    BOOLEAN,
-    "fog_lights"       BOOLEAN,
-    "wiper_level"      DECIMAL(1,0),              -- 0 off, 1 interval, 2 normal, 3 fast
-    "outside_temp_c"   DECIMAL(4,1),
-    "airbag"           BOOLEAN,
-    "ingested_wall"    TIMESTAMP NOT NULL          -- wall clock when the row was written
 );
 
 -- Readings of the virtual sensors, every 60 s of simulation time. Since 2026-11-09 they are sent to the

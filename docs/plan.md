@@ -2,11 +2,11 @@
 
 This is the working plan the demo was built from, kept as its design record. How to set up and run the demo is in [README.md](../README.md) and [AGENTS.md](../AGENTS.md); the background on the Mobility Data Space and DFRS is in [context.md](context.md).
 
-Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: steps 2 (Kafka sidecar), 3 (loading) and 4 (simulator) done.
+Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: steps 2 to 6 done, step 7 (docs, deck) open.
 
 ## Revision 2026-11-09: a reference implementation for DFRS partners
 
-**Status: in progress.** Done: step 2 (Apache Kafka and Kafbat UI as sidecars; Redpanda first, replaced the same day) step 3 (Kafka connector, loader, restart test) and step 4 (the simulator sends SRTI events per provider); `scripts/setup_kafka.py`, `scripts/kafka_loader.py`, `scripts/srti_events.py`. Until steps 5 and 6 are built nothing gets confirmed, and the dashboard shows no new data.
+**Status: in progress.** Done (2026-11-09): steps 2 to 6. The demo runs end to end again: partners send SRTI events through Kafka, `scripts/road_safety_service.py` loads, combines and publishes them, the dashboard shows it. Open: step 7 (README, `docs/context.md`, the deck) and a real DFRS sample (step 1).
 
 ### The pitch
 
@@ -157,8 +157,13 @@ Not run in iteration 1: heavy, invisible on stage, and it needs an MDS identity.
    - Sensor readings go to `datex.road-operator` too; loop detectors and cameras take their vehicle counts and speeds from the traffic model (`road_traffic.vehicles_on`).
    - Tested: every scenario type; steering (one provider, a second one added, the sensor added, an impossible provider refused); cancels when a scenario stops; `--transport direct`; 10x speed with eight scenarios at once: 3,362 messages sent, 3,362 loaded, each Kafka position once.
    - Found on the way: the wrong-way driver ends when it reaches the edge of the road network (A9 north of Garching: after about 1.5 km); the loader shared a database connection between threads with more topics than workers (fixed: a connection pool).
-5. Combination SQL, reach from traffic volume, `INCIDENTS`, `INCIDENT_EVIDENCE`, publishing to `srti.confirmed`. Test all trigger types again (same list as the 2026-11-07 test), each with one provider (not confirmed) and two (confirmed).
-6. Dashboard: events by provider, outbound ticker, offers panel, traffic volume background.
+5. Combination SQL, reach from traffic volume, `INCIDENTS`, `INCIDENT_EVIDENCE`, publishing to `srti.confirmed`. Test all trigger types again (same list as the 2026-11-07 test), each with one provider (not confirmed) and two (confirmed). **Done** (2026-11-09):
+   - `scripts/road_safety_service.py` runs load (Kafka connector), parse (`roadsafety/parse.sql`, a watermark per topic id and partition in `PARSE_STATE`), combine (`roadsafety/combine.sql`), keeps `INCIDENTS` and `INCIDENT_EVIDENCE`, and publishes new, update and cleared to `srti.confirmed` (`OUTBOUND_MESSAGES`), every 3 s. After a restart it publishes the active incidents again; incidents of an ended run are cleared.
+   - Grouping in SQL: reports of one category within the category's radius (300 m slippery road, 150 m obstacle, 250 m accident, 400 m road works, 2.5 km wrong-way driver, 5 km fog, 6 km storm), heading the same way for directional categories; each report joins the group of its earliest neighbour. Confirmed: 2 providers, or 1 plus a road operator sensor, or the road operator alone for road works and wrong-way cameras. About 0.2 s per run.
+   - Sensor alerts are evidence too (low friction on a frozen surface, poor visibility, wrong-way camera, stationary vehicle, warning trailer).
+   - Tested live: one provider stays a single report; a second confirms it (10 s after its first report); stop clears it; the wrong-way driver moves and clears when gone; the accident becomes an unmanaged blockage after 10 min; road works confirmed by the trailer alone; false alarms never confirmed; restart republishes.
+   - Not done: clearing by absence (providers passing the spot without reporting it). Incidents clear when no valid report is left (cancel or expiry).
+6. Dashboard: events by provider, outbound ticker, offers panel, traffic volume background. **Done** (2026-11-09): map with the valid events as dots in the provider's colour (grey: single reports, not confirmed), road sensors, confirmed incidents with their evidence, reach and published id; background: traffic volume per main road at the simulated hour; incident cards; the outbound ticker; offers and contracts; sliders for the providers needed and whether a sensor may replace one (what-if: the service keeps the default rule); an event stream tab with every message, classed. The queues, diversions and probe-speed traffic state of the raw-signal version are gone.
 7. Docs: README (the pitch), `docs/context.md` (the mapping table and "what the demo doesn't show"), AGENTS.md (setup table, troubleshooting), the deck (setup, detection, a slide "what you receive and what you send", the iterations).
 
 ### Open questions

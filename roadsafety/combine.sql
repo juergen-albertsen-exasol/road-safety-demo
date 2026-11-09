@@ -54,9 +54,12 @@ ev AS (   -- every message of this run in the window; rn = 1 is the current vers
     SELECT e."event_id", e."version", e."status", e."provider", e."srti_category", e."cause", e."confidence",
            e."lat", e."lon", e."heading_deg", e."road", e."detected_at", e."valid_until", e."sensor_id",
            ROW_NUMBER() OVER (PARTITION BY e."event_id" ORDER BY e."version" DESC, e."kafka_offset" DESC) AS rn,
-           MIN(e."detected_at") OVER (PARTITION BY e."event_id") AS first_at
+           f.first_at
     FROM ROAD_SAFETY.SRTI_EVENTS e
     JOIN now_ n ON e."sim_run_id" = n.run_id
+    JOIN (SELECT x."event_id", MIN(x."detected_at") AS first_at   -- the first report, also when it is older than the window
+          FROM ROAD_SAFETY.SRTI_EVENTS x JOIN now_ m ON x."sim_run_id" = m.run_id
+          GROUP BY x."event_id") f ON f."event_id" = e."event_id"
     WHERE e."detected_at" > ADD_MINUTES(n.sim_now, -{window_min!d}) AND e."detected_at" <= n.sim_now
 ),
 readings AS (   -- sensor readings in the window, with the alert each one raises

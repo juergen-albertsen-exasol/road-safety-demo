@@ -2,16 +2,16 @@
 
 Standing instructions for an AI coding agent (Claude Code, Codex or another client) working in this repo. Claude Code and Codex read this file automatically when started in the repo folder.
 
-**What this repo is:** a live demo of Data for Road Safety (DFRS) on Exasol. Simulated connected vehicles and road sensors stream signals into a local Exasol database; SQL detects the eight SRTI hazard categories from those signals; a Dash dashboard shows them live on a map of Munich. Background: [docs/context.md](docs/context.md). Design and history: [docs/plan.md](docs/plan.md). Overview for people: [README.md](README.md).
+**What this repo is:** a live demo of Data for Road Safety (DFRS) on Exasol, built as a reference implementation a DFRS partner can run on its own machine. Simulated carmakers, a navigation service and a road operator send SRTI events and sensor readings through Kafka; Exasol loads them, combines them with SQL into confirmed incidents and publishes those back as warnings (`scripts/road_safety_service.py`); a Dash dashboard shows it live on a map of Munich. Background: [docs/context.md](docs/context.md). Design and history: [docs/plan.md](docs/plan.md). Overview for people: [README.md](README.md).
 
 The user is usually a presenter preparing or giving a talk. Two kinds of requests: **setting the demo up** on a fresh machine, and **running it** on stage.
 
 ## Ground rules
 
 - **Never print, copy or ask for a password.** The `sys` password lives in `~/.exasol/personal/deployments/road-safety-demo/secrets.json`, the dashboard password in `secrets/dash_readonly_password`. Scripts read them; you don't. Never put a password on a command line or in a file outside those places.
-- **Analysis SQL is read-only.** Answer questions with `SELECT` through the `exasol-personal` MCP server (or `exapump sql -p road-safety-demo` when MCP isn't available). Writes happen only through the repo's scripts: loading (`load_road_data.sh`), the simulator (`simulate_road_safety.py`) and `setup_access.py`.
-- **Every hazard is a visible simulation.** Before each trigger, say in two or three plain lines that this is a simulation, what it injects (which signals, where) and that it writes no hazard: detection is left to the SQL. After the trigger, show its SIMULATION banner line.
-- **Show your SQL** before you interpret a result. State what the data can't say: the vehicles and sensors are synthetic; traffic volume follows real counts but is modelled; roadworks are a snapshot.
+- **Analysis SQL is read-only.** Answer questions with `SELECT` through the `exasol-personal` MCP server (or `exapump sql -p road-safety-demo` when MCP isn't available). Writes happen only through the repo's scripts: loading (`load_road_data.sh`), the simulator (`simulate_road_safety.py`), the service (`road_safety_service.py`), `setup_kafka.py` and `setup_access.py`.
+- **Every hazard is a visible simulation.** Before each trigger, say in two or three plain lines that this is a simulation, which partners will report what and where, and that it writes no incident: confirming it is left to the SQL. After the trigger, show its SIMULATION banner line.
+- **Show your SQL** before you interpret a result. State what the data can't say: the partners, their events and the sensor readings are synthetic; traffic volume follows real counts but is modelled; roadworks are a snapshot.
 - **Metric units:** m and km, km/h, seconds and minutes, °C.
 - **Ask before installing software** (the Exasol Personal launcher, exapump, Dash Server) or changing anything outside this repo. Everything inside the repo and the database deployment `road-safety-demo` is yours to set up.
 
@@ -29,7 +29,7 @@ When the user says "set up the demo" (or similar), work through these steps in o
 | 6 | `.venv/bin/python -c "import osmium, shapely, pyexasol, kafka"` works | `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` |
 | 7 | `exapump profile show road-safety-demo` works | `.venv/bin/python scripts/setup_access.py` (creates the profile; warns that the schemas don't exist yet, which is fine here) |
 | 8 | `ROAD_DATA` has 15 tables with rows: `SELECT TABLE_NAME, TABLE_ROW_COUNT FROM EXA_ALL_TABLES WHERE TABLE_SCHEMA = 'ROAD_DATA'` | `.venv/bin/python scripts/prepare_road_data.py` (downloads about 600 MB into `~/.cache/munich-road-data`, writes `data/road-data/`), then `scripts/load_road_data.sh`. Run it in the background and report progress |
-| 9 | `.venv/bin/python scripts/simulate_road_safety.py status` runs without error and `ROAD_SAFETY.INFRA_SENSORS` has 158 rows | `simulate_road_safety.py setup` (providers and sensors). Until step 5 of the 2026-11-09 revision is built, also `simulate_road_safety.py views` (the old detection views the dashboard still reads) |
+| 9 | `.venv/bin/python scripts/simulate_road_safety.py status` runs without error, `ROAD_SAFETY.INFRA_SENSORS` has 158 rows and the view `ROAD_SAFETY.V_INCIDENTS_LIVE` exists | `simulate_road_safety.py setup` (providers and sensors), then `simulate_road_safety.py views`. The service creates its own tables (`roadsafety/service_schema.sql`) when it starts |
 | 10 | User `DASH_READONLY` exists (`EXA_DBA_USERS`) and `secrets/dash_readonly_password` exists | `.venv/bin/python scripts/setup_access.py` |
 | 11 | Dash Server answers on <http://127.0.0.1:5100> | Ask to clone and install it next to this repo: `git clone https://github.com/exasol-labs/dash-server ../dash-server && (cd ../dash-server && python3 -m venv .venv && .venv/bin/pip install -e .)`. Then start it in the background: `scripts/start_dash_server.sh` |
 | 12 | The `dash-server` and `exasol-personal` MCP tools are available in this session | Both are registered in `.mcp.json`. The client loads them at start: ask the user to restart the session (Claude Code: approve the project MCP servers when asked), then continue from here |
@@ -45,20 +45,18 @@ The source is `dashboard/`: `app.py`, `requirements.txt`, `dash-app.json` (profi
 2. `app_deploy_draft{name: "munich-road-conditions", deployment_target: "live", auto_rollback_on_health_failure: true}`. The result includes validation and the healthcheck.
 3. If it fails: `app_tail_logs` or `app_inspect_traceback`, fix, deploy again. Warnings about unreferenced SQL files or unbounded queries can be ignored: the app loads its queries through the helper.
 
-The composite queries (`hazards_live.sql`, `hazard_evidence.sql`, `traffic_state.sql`, `congestion.sql`, `diversions.sql`) are generated from `roadsafety/`. After changing a template there, run `.venv/bin/python scripts/build_dashboard_queries.py dashboard/queries` and `simulate_road_safety.py views`, then redeploy. Keep `dashboard/` as the source of truth: when you change the live app, change the repo file too.
+`queries/incidents_live.sql` is generated from `roadsafety/combine.sql`, the SQL the service runs. After changing it, run `.venv/bin/python scripts/build_dashboard_queries.py dashboard/queries` and `simulate_road_safety.py views`, restart the service, then redeploy. If `app_put_files` is impractical for a large file, copying the files into the draft workspace (`workspace_path` in `app_list_files`) and deploying works too. Keep `dashboard/` as the source of truth: when you change the live app, change the repo file too.
 
 ## Running the demo
 
-> **In progress (revision 2026-11-09):** the simulator now sends SRTI events per provider through Kafka (step 4 done). The combination SQL that confirms them (step 5) and the dashboard (step 6) are not built yet, so nothing gets confirmed and the dashboard shows no new data. Steps 3 and 4 below can't be done until then.
-
-**Start:** check that the database, the Kafka sidecar and Dash Server run, then start the loader and the simulator in the background:
+**Start:** check that the database, the Kafka sidecar and Dash Server run, then start the service and the simulator in the background:
 
 ```bash
-.venv/bin/python scripts/kafka_loader.py
+.venv/bin/python scripts/road_safety_service.py
 .venv/bin/python scripts/simulate_road_safety.py run --start 07:30 --speed 3
 ```
 
-The simulator plays the partners: six carmakers and a navigation service send SRTI events (one Kafka topic each, `srti.oem-a` ... `srti.nav`), the road operator sends its sensor readings (`datex.road-operator`). The loader imports every topic into `ROAD_SAFETY.INBOUND_MESSAGES` every 3 seconds. Both keep running until stopped. Without Kafka: `run --transport direct` writes the same messages straight into `INBOUND_MESSAGES`, no loader needed. `status` shows the run, the simulated time and the messages per topic; `speed <factor>` changes the speed while it runs. The presenter may prefer a second terminal with `--log events`, which prints every event sent (red: from a triggered scenario; yellow, marked `[false alarm]`: a single report nobody confirms) and the sensor alerts.
+The simulator plays the partners: six carmakers and a navigation service send SRTI events (one Kafka topic each, `srti.oem-a` ... `srti.nav`), the road operator sends its sensor readings (`datex.road-operator`). The service is what a partner would run: every 3 seconds it loads the topics into `INBOUND_MESSAGES`, parses them into `SRTI_EVENTS` and `SENSOR_READINGS`, combines them (`roadsafety/combine.sql`), keeps `INCIDENTS` and publishes every new, changed or cleared incident to the topic `srti.confirmed` (logged in `OUTBOUND_MESSAGES`). It prints one line per published incident. Both keep running until stopped; the service survives `exasol stop`/`start` and publishes the active incidents again. Without Kafka: `run --transport direct` and `road_safety_service.py --transport direct`. `status` shows the run, the simulated time and the messages per topic; `speed <factor>` changes the speed while it runs. The presenter may prefer a second terminal with `--log events`, which prints every event sent (red: from a triggered scenario; yellow, marked `[false alarm]`: a single report nobody confirms), the sensor alerts, and a banner for every incident Exasol confirms or clears.
 
 **False alarms are part of the show:** about 20 per simulated hour, one provider reports a hazard where nothing happened. They must never be confirmed. If one is, the rules are too loose.
 
@@ -73,7 +71,7 @@ The simulator plays the partners: six carmakers and a navigation service send SR
 1. Map the words to one event, road, place and direction. Event types and aliases: `wrong_way_driver` (wrong_way), `accident` (crash), `slippery_road` (ice), `oil_spill` (oil), `debris` (obstacle), `animal`, `roadworks` (works), `fog` (visibility), `storm` (weather). `simulate_road_safety.py scenarios` lists where each fits.
 2. If the wording leaves the spot open, run with `--dry-run` first and say where it lands ("Fürstenrieder Straße southbound near Laimer Platz, 4 road segments"). If the command says the road doesn't pass the place or the event doesn't fit the road, propose something close instead of forcing it.
 3. Announce the simulation (see ground rules), then run `simulate_road_safety.py trigger <event> --road <road> --near <place> [--direction <dir>]` and show the banner. It says who will report the event and after how many seconds (the defaults per event: `scenarios`).
-4. Watch for the confirmation: poll `ROAD_SAFETY.V_HAZARD_REACH` every few seconds in the background (up to about 3 minutes) and report category, cause, time from first signal to confirmation, vehicles, providers, sensors, confidence and the reach. Busy motorways confirm in seconds; quiet streets without a sensor can take a minute or two.
+4. Watch for the confirmation: poll `ROAD_SAFETY.INCIDENTS` (new rows of the current run) every few seconds in the background, up to about 3 minutes, and report category, cause, the rule that confirmed it, providers and sensors, the time from the first report to the confirmation (`first_report_at`, `confirmed_at`), confidence and the reach. With the default delays an incident is confirmed about 30 to 90 simulated seconds after the trigger, once the second provider reports. If it was triggered with one provider only, say that it stays a single report until a second one (or `--sensor`) is added.
 
 `trigger <event> --stop` ends one event, `stop-all` ends all of them. The providers then withdraw their events (`cancel`).
 
@@ -89,36 +87,37 @@ The simulator plays the partners: six carmakers and a navigation service send SR
 
 Not every provider can report everything (`scripts/srti_events.py`): the navigation service has no airbag or ESC data (obstacles and road works only), OEM E and F have no environment sensors (no fog or storm), road works come from the road operator's warning trailer. The command refuses an impossible combination and lists who can; propose one of those.
 
-**Questions during the demo** ("why was it confirmed?", "who gets warned?", "only count hazards that 3 providers confirm"): answer from the views with SQL. `V_HAZARD_EVIDENCE` has every signal and sensor reading behind a hazard. The thresholds are parameters of the templates in `roadsafety/hazards.sql`; the dashboard has sliders for providers and vehicles.
+**Questions during the demo** ("why was it confirmed?", "who gets warned?", "what was passed on?", "only count incidents that 3 providers confirm"): answer with SQL. `INCIDENT_EVIDENCE` lists the reports behind an incident (join `SRTI_EVENTS` on `event_id` = `report_id` for the details); `V_INCIDENTS_LIVE` is the combination with the default rule right now, including single reports that are not confirmed; `OUTBOUND_MESSAGES` is everything published, with its payload. For a stricter or looser rule, render `roadsafety/combine.sql` with other parameters (`min_providers`, `sensor_replaces`); the dashboard has the same as sliders (what-if: the service keeps publishing with the default rule).
 
 ## The data
 
 | Schema | Content |
 |---|---|
 | `ROAD_DATA` | Real open data: `ROAD_SEGMENTS` (OSM roads split into segments, with class, one-way, speed limit, bridge, tunnel), `ROAD_AREAS`, `PLACES` (805 named places for `--near`), `DISTRICTS`, `ROADWORKS`, `MOTORWAY_EVENTS`, `ACCIDENTS`, `WEATHER_*`, `TRAFFIC_PROFILE`, `BAST_STATIONS`, `TRAFFIC_HOTSPOTS`, `SEGMENT_TRAFFIC`, `ROAD_DATA_SOURCES` (source and license per table) |
-| `ROAD_SAFETY` | The simulation: `DATA_PROVIDERS` (with their topic), `INFRA_SENSORS`, `INBOUND_MESSAGES` (every message as received from Kafka, raw JSON: SRTI events and sensor readings), `SCENARIO_LOG` (what was triggered and who was told to report it: the ground truth), `SIM_STATE` (the simulated "now"). Still from the raw-signal version until steps 5 and 6: `VEHICLES`, `VEHICLE_SIGNALS`, `SENSOR_READINGS` and the views `V_HAZARDS_LIVE`, `V_HAZARD_REACH`, `V_HAZARD_EVIDENCE` |
+| `ROAD_SAFETY` | The partners: `DATA_PROVIDERS` (with their topic), `INFRA_SENSORS`. What arrives: `INBOUND_MESSAGES` (every message as received from Kafka, raw JSON), parsed into `SRTI_EVENTS` (every version of every event) and `SENSOR_READINGS`. What the service makes of it: `INCIDENTS` (stable id, lifecycle, rule, providers, reach), `INCIDENT_EVIDENCE`, `OUTBOUND_MESSAGES` (what was published to `srti.confirmed`), `DATA_OFFERS` and `CONTRACTS` (data space metadata, not enforced), the view `V_INCIDENTS_LIVE`. The simulation: `SCENARIO_LOG` (what was triggered and who was told to report it: the ground truth), `SIM_STATE` (the simulated "now") |
 | `KAFKA_EXTENSION`, `KAFKA_STAGE` | The Kafka connector's UDF scripts, and the loader's staging table per topic (only the last row per partition, for the connector's position) |
 
 Sources, licenses and limits: [research/road-data-sources.md](research/road-data-sources.md).
 
 **SQL quirks:**
-- Column names are lowercase and must be double-quoted (`"hazard_type"`); schema and table names are upper case and unquoted.
+- Column names are lowercase and must be double-quoted (`"srti_category"`); schema and table names are upper case and unquoted.
 - Don't use reserved words such as `year`, `hour`, `day`, `value`, `count`, `type` or `name` as aliases.
 - "Now" is the simulated time in `SIM_STATE`, not the wall clock.
-- The detection SQL must never read `SCENARIO_LOG`. Comparing detections with `SCENARIO_LOG` afterwards is fine, and a good way to show what was injected and what was found.
-- The templates in `roadsafety/` use pyexasol placeholders (`{window_min!d}`); `simulate_road_safety.py views` fills them with the defaults.
+- The combination SQL must never read `SCENARIO_LOG`, and the messages never carry a scenario id. Comparing incidents with `SCENARIO_LOG` afterwards is fine, and a good way to show what was injected and what was confirmed.
+- `roadsafety/combine.sql` uses pyexasol placeholders (`{min_providers!d}`); the service and `simulate_road_safety.py views` fill them with the defaults.
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
 | The `exasol-personal` MCP server fails with ECONNREFUSED | The database or its MCP sidecar isn't running: `exasol start -d road-safety-demo`, then `exasol mcp status -d road-safety-demo` |
-| The dashboard is empty or frozen | The simulator isn't running (`simulate_road_safety.py status`), or the database is stopped |
+| The dashboard is empty or frozen | The simulator or the service isn't running (`simulate_road_safety.py status` shows the run and the messages per topic), or the database is stopped |
+| Events arrive but nothing is confirmed | Is the service running? It prints a line per published incident. Was the event triggered with one provider only (`--providers`)? Compare `V_INCIDENTS_LIVE` (single reports have `confirmed` false) |
 | The dashboard page shows an error, while the healthcheck is fine | The healthcheck doesn't run callbacks: read `app_tail_logs` |
 | "license limit of 20 parallel connections", or a git conflict in Dash Server | Wait a few seconds and retry once |
-| A trigger's events don't arrive | Check that the simulator and the loader run. Its banner and `--log events` show who reports it and when; `INBOUND_MESSAGES` shows what arrived (filter `"payload"` on the provider or category) |
+| A trigger's events don't arrive | Check that the simulator and the service run. Its banner and `--log events` show who reports it and when; `INBOUND_MESSAGES` shows what arrived (filter `"payload"` on the provider or category) |
 | A sidecar fails with `toomanyrequests: You have reached your unauthenticated pull rate limit` | Docker Hub limits anonymous pulls. Wait a while and run `exasol start -d road-safety-demo` again |
-| A Kafka import fails with `No resolvable bootstrap urls` | The UDF sandbox has no DNS; the Java scripts read `kafka` from the hosts file in BucketFS. `scripts/kafka_loader.py` rewrites it at start and on this error. By hand: run the loader once with `--once` |
+| A Kafka import fails with `No resolvable bootstrap urls` | The UDF sandbox has no DNS; the Java scripts read `kafka` from the hosts file in BucketFS. `scripts/kafka_loader.py` rewrites it at start and on this error. By hand: `scripts/kafka_loader.py --once` |
 | A Kafka import fails with `Error parsing script options` | A script in `KAFKA_EXTENSION` lost the `;` after its last option. Run `scripts/setup_kafka.py` again: it sends each script with its closing `/`, which keeps the `;` |
-| Kafka messages don't arrive in `ROAD_SAFETY.INBOUND_MESSAGES` | Is the loader running (`scripts/kafka_loader.py`)? It prints one line per import. The topic must start with `srti.` or `datex.` (or pass `--prefix`) |
+| Kafka messages don't arrive in `ROAD_SAFETY.INBOUND_MESSAGES` | Is the service running (`scripts/road_safety_service.py`, or `kafka_loader.py` alone)? `--verbose` prints one line per import. The topic must start with `srti.` or `datex.` (or pass `--prefix`) |
 | pyexasol bulk import fails on the version string of Exasol Personal | Known; the simulator uses multi-row INSERTs instead. Don't switch it to `import_from_iterable` |
