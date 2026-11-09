@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Start one of the demo's scripts by a short name; everything after the name is passed on.
+#
+#   ./demo <name> [arguments ...]
+#   ./demo sim run --start 07:30 --speed 3 --log events
+#   ./demo sim trigger oil_spill --road A9 --near Freimann --providers OEM_A
+#   ./demo service
+#   ./demo help
+#
+# Python scripts run with the project's virtual environment (.venv), from the repo folder.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY="$ROOT/.venv/bin/python"
+
+usage() {
+    cat <<'EOF'
+Usage: ./demo <name> [arguments ...]
+
+  service   scripts/road_safety_service.py       load, combine and publish (the partner's service)
+  sim       scripts/simulate_road_safety.py      the simulated partners: run, trigger, stop-all, speed,
+                                                 scenarios, status, setup, views, reset
+  loader    scripts/kafka_loader.py              load the Kafka topics only (the service does this too)
+  kafka     scripts/setup_kafka.py               set up the Kafka sidecars and the connector
+  access    scripts/setup_access.py              exapump profile and the dashboard's read-only user
+  prepare   scripts/prepare_road_data.py         download and prepare the open data
+  load      scripts/load_road_data.sh            load the open data into ROAD_DATA
+  queries   scripts/build_dashboard_queries.py   regenerate the dashboard's combination query
+  dash      scripts/start_dash_server.sh         start Dash Server
+
+Arguments after the name go to the script; `./demo <name> --help` shows its options.
+EOF
+}
+
+name="${1:-help}"
+shift || true
+
+case "$name" in
+    service) script="road_safety_service.py" ;;
+    sim)     script="simulate_road_safety.py" ;;
+    loader)  script="kafka_loader.py" ;;
+    kafka)   script="setup_kafka.py" ;;
+    access)  script="setup_access.py" ;;
+    prepare) script="prepare_road_data.py" ;;
+    queries) script="build_dashboard_queries.py" ;;
+    load)    cd "$ROOT" && exec "$ROOT/scripts/load_road_data.sh" "$@" ;;
+    dash)    cd "$ROOT" && exec "$ROOT/scripts/start_dash_server.sh" "$@" ;;
+    help|-h|--help) usage; exit 0 ;;
+    *) echo "unknown name: $name" >&2; usage >&2; exit 2 ;;
+esac
+
+if [[ ! -x "$PY" ]]; then
+    echo "No virtual environment in $ROOT/.venv. Create it first:" >&2
+    echo "  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+    exit 1
+fi
+
+cd "$ROOT"
+exec "$PY" "$ROOT/scripts/$script" "$@"

@@ -56,6 +56,8 @@ The source is `dashboard/`: `app.py`, `requirements.txt`, `dash-app.json` (profi
 .venv/bin/python scripts/simulate_road_safety.py run --start 07:30 --speed 3
 ```
 
+`./demo` is a short form for all scripts (`./demo service`, `./demo sim run ...`, `./demo sim trigger ...`; `./demo help` lists the names). It runs them with `.venv` from the repo folder.
+
 The simulator plays the partners: six carmakers and a navigation service send SRTI events (one Kafka topic each, `srti.oem-a` ... `srti.nav`), the road operator sends its sensor readings (`datex.road-operator`). The service is what a partner would run: every 3 seconds it loads the topics into `INBOUND_MESSAGES`, parses them into `SRTI_EVENTS` and `SENSOR_READINGS`, combines them (`roadsafety/combine.sql`), keeps `INCIDENTS` and publishes every new, changed or cleared incident to the topic `srti.confirmed` (logged in `OUTBOUND_MESSAGES`). It prints one line per published incident. Both keep running until stopped; the service survives `exasol stop`/`start` and publishes the active incidents again. Without Kafka: `run --transport direct` and `road_safety_service.py --transport direct`. `status` shows the run, the simulated time and the messages per topic; `speed <factor>` changes the speed while it runs. The presenter may prefer a second terminal with `--log events`, which prints every event sent (red: from a triggered scenario; yellow, marked `[false alarm]`: a single report nobody confirms), the sensor alerts, and a banner for every incident Exasol confirms or clears.
 
 **False alarms are part of the show:** about 20 per simulated hour, one provider reports a hazard where nothing happened. They must never be confirmed. If one is, the rules are too loose.
