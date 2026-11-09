@@ -56,6 +56,12 @@ The composite queries (`hazards_live.sql`, `hazard_evidence.sql`, `traffic_state
 
 It writes a batch every 2 seconds and keeps running until stopped. `status` shows the run and the simulated time; `speed <factor>` changes the speed while it runs. The presenter may prefer a second terminal with `--log events`, which prints event signals, sensor alerts and confirmed incidents.
 
+**Runs don't resume.** Every `run` starts a new run (new `run_id`) at its `--start` time and first closes every event that is still open in `SCENARIO_LOG` (it sets `ended_at` to the start time). So:
+- After the simulator has stopped, there is nothing to clean up: an event without `ended_at` from an earlier run is not active, and it won't come back. Don't tell the user it will.
+- To continue a scenario after a restart, trigger it again in the new run.
+- While no run is active, the dashboard shows the last state of the stopped run, frozen. It switches to the new run once one starts.
+- To check whether anything is really active, look at the `status` of the latest run in `SIM_STATE` first, then at the open events of that `run_id`.
+
 **A trigger request** ("a wrong-way driver on the A9 southbound near Garching", "oil on Fürstenrieder Straße near Laimer Platz"):
 
 1. Map the words to one event, road, place and direction. Event types and aliases: `wrong_way_driver` (wrong_way), `accident` (crash), `slippery_road` (ice), `oil_spill` (oil), `debris` (obstacle), `animal`, `roadworks` (works), `fog` (visibility), `storm` (weather). `simulate_road_safety.py scenarios` lists where each fits.
