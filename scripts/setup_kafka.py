@@ -1,25 +1,27 @@
-"""Set up Kafka for the deployment: Redpanda sidecars and the Exasol Kafka connector extension.
+"""Set up Kafka for the deployment: Apache Kafka sidecars and the Exasol Kafka connector extension.
 
-1. Adds Redpanda and Redpanda Console as user entries to the deployment's sidecars.yaml (the
-   launcher only enables catalog sidecars with `exasol sidecar enable`).
+1. Adds Apache Kafka (KRaft mode, one node) and Kafbat UI as user entries to the deployment's
+   sidecars.yaml (the launcher only enables catalog sidecars with `exasol sidecar enable`).
+   Removes the Redpanda entries an earlier version of this script added.
 2. Downloads the connector JAR, checks its SHA-256 and copies it into BucketFS. Local deployments
    have no BucketFS HTTP access; the bucket is a directory in the deployment.
 3. Records the JAVA script language container if it's missing (active after the next restart).
 4. Creates the UDF scripts in KAFKA_EXTENSION (roadsafety/kafka_extension.sql).
 
 Every step is skipped when it's already done. Afterwards it says whether a start or a restart is
-needed: new sidecars need `exasol start` (the database keeps running), a new Java container needs
-`exasol stop` and `exasol start`.
+needed: changed sidecars need `exasol start` (the database keeps running), a new Java container
+needs `exasol stop` and `exasol start`.
 
-    .venv/bin/python scripts/setup_kafka.py [--deployment road-safety-demo] [--no-console]
+    .venv/bin/python scripts/setup_kafka.py [--deployment road-safety-demo] [--no-ui]
 
 Addresses:
-- from the database (Kafka connector UDFs): redpanda:9092
+- from the database (Kafka connector UDFs): kafka:9092
 - from the laptop (simulator, loader):      127.0.0.1:19092
-- Redpanda Console:                         http://127.0.0.1:18080
+- Kafbat UI:                                http://127.0.0.1:18080
 
-Redpanda keeps nothing across `exasol stop`: topics start empty after each start.
-Exasol is the system of record (see docs/plan.md, revision 2026-11-09).
+Both are Apache 2.0 and send nothing home. Kafka keeps nothing across `exasol stop` (sidecars have
+no volumes): topics start empty after each start. Exasol is the system of record (see
+docs/plan.md, revision 2026-11-09).
 """
 
 import argparse
@@ -39,31 +41,42 @@ CONNECTOR_JAR = f"exasol-kafka-connector-extension-{CONNECTOR_VERSION}.jar"
 CONNECTOR_URL = f"https://github.com/exasol/kafka-connector-extension/releases/download/{CONNECTOR_VERSION}/{CONNECTOR_JAR}"
 BUCKET_DIR = "local/runtime/exa/bucketfs/bfsdefault/default/kafka"  # /buckets/bfsdefault/default/kafka in SQL
 
-REDPANDA_IMAGE = "docker.io/redpandadata/redpanda:v26.2.6"
-CONSOLE_IMAGE = "docker.io/redpandadata/console:v3.13.1"
+KAFKA_IMAGE = "docker.io/apache/kafka:4.4.0"
+KAFKA_UI_IMAGE = "docker.io/kafbat/kafka-ui:v1.5.0"
+LEGACY = ("redpanda", "redpanda-console")  # added by earlier versions of this script
+
+
+def env(**kv: str) -> str:
+    return "".join(f"                - name: {k}\n                  value: \"{v}\"\n" for k, v in kv.items())
+
 
 # Indented to sit under the top-level `sidecars:` key, like the launcher writes it.
-REDPANDA = f"""\
-    redpanda:
+# The image takes its whole configuration from KAFKA_* variables once any is set.
+KAFKA = f"""\
+    kafka:
         enabled: true
         container:
-            name: redpanda
-            image: {REDPANDA_IMAGE}
+            name: kafka
+            image: {KAFKA_IMAGE}
             imagePullPolicy: IfNotPresent
-            args:
-                - redpanda
-                - start
-                - --mode
-                - dev-container
-                - --smp
-                - "1"
-                - --memory
-                - 1G
-                - --default-log-level=warn
-                - --kafka-addr
-                - internal://0.0.0.0:9092,external://0.0.0.0:19092
-                - --advertise-kafka-addr
-                - internal://redpanda:9092,external://127.0.0.1:19092
+            env:
+{env(CLUSTER_ID="lCta9CuTTLqZ1cPFipnIlw",
+     KAFKA_NODE_ID="1",
+     KAFKA_PROCESS_ROLES="broker,controller",
+     KAFKA_CONTROLLER_QUORUM_VOTERS="1@localhost:9093",
+     KAFKA_LISTENERS="INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092,CONTROLLER://localhost:9093",
+     KAFKA_ADVERTISED_LISTENERS="INTERNAL://kafka:9092,EXTERNAL://127.0.0.1:19092",
+     KAFKA_LISTENER_SECURITY_PROTOCOL_MAP="INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT",
+     KAFKA_CONTROLLER_LISTENER_NAMES="CONTROLLER",
+     KAFKA_INTER_BROKER_LISTENER_NAME="INTERNAL",
+     KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR="1",
+     KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR="1",
+     KAFKA_TRANSACTION_STATE_LOG_MIN_ISR="1",
+     KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR="1",
+     KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR="1",
+     KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS="0",
+     KAFKA_AUTO_CREATE_TOPICS_ENABLE="true",
+     KAFKA_HEAP_OPTS="-Xms256m -Xmx512m")}\
             ports:
                 - name: kafka
                   containerPort: 19092
@@ -77,21 +90,23 @@ REDPANDA = f"""\
             readinessProbe:
                 tcpSocket:
                     port: kafka
-                periodSeconds: 5
+                periodSeconds: 2
                 timeoutSeconds: 1
-                failureThreshold: 24
+                failureThreshold: 60
 """
 
-CONSOLE = f"""\
-    redpanda-console:
+KAFKA_UI = f"""\
+    kafka-ui:
         enabled: true
         container:
-            name: redpanda-console
-            image: {CONSOLE_IMAGE}
+            name: kafka-ui
+            image: {KAFKA_UI_IMAGE}
             imagePullPolicy: IfNotPresent
             env:
-                - name: KAFKA_BROKERS
-                  value: redpanda:9092
+{env(KAFKA_CLUSTERS_0_NAME="road-safety-demo",
+     KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS="kafka:9092",
+     DYNAMIC_CONFIG_ENABLED="false",
+     JAVA_OPTS="-Xmx256m")}\
             ports:
                 - name: http
                   containerPort: 8080
@@ -102,10 +117,10 @@ CONSOLE = f"""\
             readinessProbe:
                 httpGet:
                     port: http
-                    path: /
+                    path: /actuator/health
                 periodSeconds: 5
-                timeoutSeconds: 1
-                failureThreshold: 24
+                timeoutSeconds: 2
+                failureThreshold: 36
         endpoints:
             - port: http
               scheme: http
@@ -116,37 +131,41 @@ CONSOLE = f"""\
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--deployment", default="road-safety-demo")
-    parser.add_argument("--no-console", action="store_true", help="skip Redpanda Console")
+    parser.add_argument("--no-ui", action="store_true", help="skip Kafbat UI")
     args = parser.parse_args()
 
     deployment = Path.home() / ".exasol/personal/deployments" / args.deployment
-    added = add_sidecars(deployment / "sidecars.yaml", args.no_console)
+    added = add_sidecars(deployment / "sidecars.yaml", args.no_ui)
     install_jar(deployment / BUCKET_DIR)
     java_new = ensure_java(args.deployment)
     create_scripts(args.deployment)
 
     if java_new:
         print(f"Next: exasol stop -d {args.deployment} && exasol start -d {args.deployment} (activates Java"
-              f"{', starts the new sidecars' if added else ''})")
+              f"{', applies the sidecar changes' if added else ''})")
     elif added:
-        print(f"Next: exasol start -d {args.deployment} (starts the new sidecars, the database keeps running)")
+        print(f"Next: exasol start -d {args.deployment} (applies the sidecar changes, the database keeps running)")
     else:
         print("Kafka setup complete.")
 
 
-def add_sidecars(path: Path, no_console: bool) -> bool:
+def add_sidecars(path: Path, no_ui: bool) -> bool:
     text = path.read_text()
     if not re.search(r"^sidecars:\s*$", text, re.M):
         raise SystemExit(f"{path}: no top-level 'sidecars:' key, edit it by hand")
-    wanted = [("redpanda", REDPANDA)] + ([] if no_console else [("redpanda-console", CONSOLE)])
+    wanted = [("kafka", KAFKA)] + ([] if no_ui else [("kafka-ui", KAFKA_UI)])
     missing = [(name, block) for name, block in wanted if not re.search(rf"^    {name}:\s*$", text, re.M)]
-    if not missing:
+    legacy = [name for name in LEGACY if re.search(rf"^    {name}:\s*$", text, re.M)]
+    if not missing and not legacy:
         print(f"sidecars: {', '.join(n for n, _ in wanted)} already defined")
         return False
     backup = path.with_suffix(f".yaml.bak-{time.strftime('%Y%m%d-%H%M%S')}")
     shutil.copy2(path, backup)
+    for name in legacy:  # an entry runs until the next key at the same indentation, or the end
+        text = re.sub(rf"^    {re.escape(name)}:\s*\n(?:(?!    \S).*\n?)*", "", text, flags=re.M)
     path.write_text(text.rstrip("\n") + "\n" + "".join(block for _, block in missing))
-    print(f"sidecars: added {', '.join(n for n, _ in missing)} to {path} (backup: {backup.name})")
+    changes = [f"added {n}" for n, _ in missing] + [f"removed {n}" for n in legacy]
+    print(f"sidecars: {', '.join(changes)} in {path} (backup: {backup.name})")
     return True
 
 
@@ -192,7 +211,9 @@ def create_scripts(deployment: str) -> None:
     db.execute("CREATE SCHEMA IF NOT EXISTS KAFKA_EXTENSION")
     scripts = re.findall(r"^CREATE OR REPLACE JAVA .*?^/$", sql, re.M | re.S)
     for script in scripts:
-        db.execute(script[:-1].strip())
+        # Send the closing "/" too: without it the database drops the ";" ending the last option
+        # (`%jar ...;`), and the Java UDF fails with "Error parsing script options".
+        db.execute(script)
     print(f"UDF scripts: {len(scripts)} created in KAFKA_EXTENSION")
 
 if __name__ == "__main__":

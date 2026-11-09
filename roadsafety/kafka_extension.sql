@@ -3,9 +3,9 @@
 -- restart) and the JAR in BucketFS. Local deployments have no BucketFS HTTP access: the JAR is
 -- copied into the deployment directory, see scripts/setup_kafka.py.
 --
--- The UDF sandbox has no DNS (empty resolv.conf and hosts), so the sidecar name `redpanda` doesn't
+-- The UDF sandbox has no DNS (empty resolv.conf and hosts), so the sidecar name `kafka` doesn't
 -- resolve there. Java reads names from the hosts file in BucketFS instead (`jdk.net.hosts.file`);
--- scripts/kafka_loader.py writes it with Redpanda's current IP on the deployment network.
+-- scripts/kafka_loader.py writes it with Kafka's current IP on the deployment network.
 --
 -- The script names must not change: KAFKA_CONSUMER generates the import, KAFKA_METADATA reads the
 -- highest KAFKA_OFFSET per partition from the target table, KAFKA_IMPORT reads the topic from there.

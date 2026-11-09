@@ -2,18 +2,18 @@
 
 This is the working plan the demo was built from, kept as its design record. How to set up and run the demo is in [README.md](../README.md) and [AGENTS.md](../AGENTS.md); the background on the Mobility Data Space and DFRS is in [context.md](context.md).
 
-Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: steps 2 (Redpanda sidecar) and 3 (loading) done.
+Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: steps 2 (Kafka sidecar) and 3 (loading) done.
 
 ## Revision 2026-11-09: a reference implementation for DFRS partners
 
-**Status: in progress.** Done: step 2 (Redpanda and Console as sidecars) and step 3 (Kafka connector, loader, restart test); `scripts/setup_kafka.py`, `scripts/kafka_loader.py`.
+**Status: in progress.** Done: step 2 (Apache Kafka and Kafbat UI as sidecars; Redpanda first, replaced the same day) and step 3 (Kafka connector, loader, restart test); `scripts/setup_kafka.py`, `scripts/kafka_loader.py`.
 
 ### The pitch
 
 Exasol shows a **reference implementation** that DFRS partners can take and run themselves: the service that receives safety events from several carmakers and road authorities, combines them into confirmed SRTI warnings, and publishes them back into the data space.
 
 - **Sovereign.** It runs on the partner's own machine or cloud account. Data stays with the partner and is exchanged directly with other partners, like the MDS itself: no central platform and no third-party service in between. Exasol Personal also deploys to the partner's own AWS, Azure, Exoscale or STACKIT account, so a European cloud is possible.
-- **Free for the first iteration.** Exasol Personal plus free components: the launcher (MIT), Dash Server (MIT), Redpanda Community Edition (free, source-available under the Business Source License), the Exasol Kafka connector extension (MIT), Python, OpenStreetMap and other open data. Free is the requirement; open source is welcome but not required.
+- **Free for the first iteration.** Exasol Personal plus free components: the launcher (MIT), Dash Server (MIT), Apache Kafka and Kafbat UI (Apache 2.0), the Exasol Kafka connector extension (MIT), Python, OpenStreetMap and other open data. Free is the requirement; open source is welcome but not required.
 - **Ready to run.** Clone the repo, point your agent at it, say "set up the demo". The rules per SRTI category are SQL with parameters, so a partner can read, change and extend them.
 
 ### What doesn't match DFRS today
@@ -33,7 +33,7 @@ The current demo gets raw vehicle signals and vehicle positions into Exasol and 
 ```
 SIMULATED PARTNERS                        THE PARTNER'S OWN SETUP (the reference implementation)
                                           ┌──────────────────────────────────────────────────────────┐
-carmakers OEM A–F, nav service           │  Redpanda (sidecar)       Exasol Personal                 │
+carmakers OEM A–F, nav service           │  Kafka (sidecar)          Exasol Personal                 │
   fake SRTI events, steered ──events─────►│  srti.oem-a … srti.nav ──►  SRTI_EVENTS                   │
 road operator                             │  datex.road-operator  ──►  SENSOR_READINGS                │
   sensors, warning trailers ─────────────►│                            │ SQL: combine, confirm,       │
@@ -92,33 +92,34 @@ The rules stay one SQL statement with parameters, per SRTI category. Typical rul
 
 A scheduled step (every few seconds, run by the loader or a Lua script) turns the live result into `INCIDENTS` rows and writes new or changed incidents to `srti.confirmed`. The live views stay for the dashboard and the agent.
 
-### Kafka (Redpanda) as a sidecar
+### Kafka as a sidecar
 
-- **Redpanda Community Edition**: speaks the Kafka protocol, one container, no JVM and no ZooKeeper, starts in seconds, runs with about 1 GB (`--mode dev-container --smp 1 --memory 1G`). Free to use, including in production; the Business Source License only forbids offering Redpanda itself as a streaming service to third parties, which a partner running it for its own service doesn't do. The license's Additional Use Grant only excludes a "Streaming or Queuing Service": a commercial offering that lets third parties use Redpanda's own functions. Each version becomes Apache 2.0 after four years. A legal sign-off is still sensible before partners rely on it. Clients only see Kafka, so a partner can swap in Apache Kafka (Apache 2.0) or a managed Kafka without changing anything else.
-- Optional second sidecar **Redpanda Console** (web UI on a loopback port): shows the topics and the messages arriving. Useful on stage ("here is what the carmakers send"); same license.
-- Added as a user entry `redpanda` in the deployment's `sidecars.yaml`. This is documented and supported in the launcher (`user-docs/content/sidecars.md` in exasol-personal): saved definitions are authoritative, user-added entries count as enabled, `exasol start -d road-safety-demo` starts them, `exasol sidecar status redpanda` reports them. `exasol sidecar enable` only accepts catalog names, so setup edits the file instead.
-- Networking: the database reaches the broker as `redpanda:9092` inside the deployment network; the simulator on the laptop uses the published port `127.0.0.1:19092`. Two listeners, each advertised with its own address. Readiness: a `tcpSocket` probe on the published port.
-- On macOS the sidecar runs in the database VM and takes memory from it. Measured on 2026-11-09: Redpanda about 290 MB, Console about 50 MB, in a VM with 24 GB and 2 CPUs (the database used about 2 GB at the time).
-- Images from `docker.io/redpandadata/` (`redpanda:v26.2.6`, `console:v3.13.1`), not `docker.redpanda.com`: that front hit Docker Hub's anonymous pull limit while `docker.io` worked.
-- Python client on the laptop: `kafka-python` (pure Python). `confluent-kafka` has no stable wheel for Python 3.15 yet.
+- **Apache Kafka 4.4** (`docker.io/apache/kafka:4.4.0`, the official JVM image) in KRaft mode: one container that is broker and controller, no ZooKeeper, heap capped at 512 MB. Apache 2.0, governed by the Apache Software Foundation, sends nothing home. Configured entirely through `KAFKA_*` variables in the sidecar definition (listeners, single-node replication factors, a fixed `CLUSTER_ID`). Not the `apache/kafka-native` image: faster, but Apache calls it experimental and not for production.
+- **Kafbat UI** (`docker.io/kafbat/kafka-ui:v1.5.0`, Apache 2.0) as a second sidecar on `http://127.0.0.1:18080`: shows the topics and the messages arriving. Useful on stage ("here is what the carmakers send").
+- **Why not Redpanda,** which step 2 used first: the sovereignty message. Redpanda is source-available under the Business Source License of one US vendor, and its default configuration reports cluster metadata to the vendor (`enable_metrics_reporter = true`, to `m.rp.vectorized.io`). Its advantages (no JVM, fast start, small) turned out small next to KRaft-mode Kafka. Kafka uses a bit more memory, see below.
+- Added as user entries `kafka` and `kafka-ui` in the deployment's `sidecars.yaml` by `scripts/setup_kafka.py`. This is documented and supported in the launcher (`user-docs/content/sidecars.md` in exasol-personal): saved definitions are authoritative, user-added entries count as enabled, `exasol start -d road-safety-demo` starts them, `exasol sidecar status kafka` reports them. `exasol sidecar enable` only accepts catalog names, so setup edits the file instead.
+- Networking: the database reaches the broker as `kafka:9092` inside the deployment network; the simulator and loader on the laptop use the published port `127.0.0.1:19092`. Two listeners (`INTERNAL`, `EXTERNAL`), each advertised with its own address, plus the controller on `localhost:9093` inside the container. Readiness: a `tcpSocket` probe on the published port.
+- On macOS the sidecars run in the database VM and take memory from it. Measured on 2026-11-09 in a VM with 24 GB and 2 CPUs: Kafka about 370 MB, Kafbat UI about 310 MB (Redpanda was about 290 MB, its Console about 50 MB). `exasol start` with both sidecars, database already stopped: 18 s.
+- Images from `docker.io/...`. A partner who takes sovereignty seriously mirrors them into a registry of their own.
+- No TLS or authentication on the broker: it is reachable only on loopback and the deployment network. Data between partners goes through the EDC connector (iteration 2), never through a published Kafka port.
 - **Loading into Exasol (built, step 3):** the Exasol Kafka connector extension 2.0.1 (MIT; Java `SET` scripts `KAFKA_CONSUMER`, `KAFKA_IMPORT`, `KAFKA_METADATA` in schema `KAFKA_EXTENSION`; JAR in BucketFS; needs the Java script language container). The database pulls the messages itself; `scripts/kafka_loader.py` on the laptop only decides when: every 3 s it compares Kafka's end offsets with what is loaded and imports only topics with new messages, up to 4 in parallel. Each import costs 2 to 3 s (JVM start), so a topic with nothing new is skipped.
-- **Measured:** 3 to 5 s from send to row in Exasol (`POLL_TIMEOUT_MS = 1000`, `CONSUME_ALL_OFFSETS = true`).
+- **Measured:** 2 to 4 s from send to row in Exasol with Apache Kafka (3 to 5 s with Redpanda) (`POLL_TIMEOUT_MS = 1000`, `CONSUME_ALL_OFFSETS = true`).
 - **The connector resumes per table, not per topic:** it reads `MAX(KAFKA_OFFSET)` per partition from the table named in `TABLE_NAME`. So each topic gets its own staging table in `KAFKA_STAGE` (only the last row per partition is kept); after each import the new rows are copied into `ROAD_SAFETY.INBOUND_MESSAGES`. Topic names stay plain (`srti.oem-a`); a run id in the name, as planned first, would not have helped.
-- **The UDF sandbox has no DNS** (empty `resolv.conf` and `hosts`), so `redpanda` doesn't resolve in a UDF, while the IP works. The Java scripts read a hosts file from BucketFS (`%jvmoption -Djdk.net.hosts.file=/buckets/bfsdefault/default/kafka/hosts`); the loader writes it with Redpanda's current IP (`podman inspect` in the VM through `exasol shell host`) at start and after an outage. Redpanda keeps advertising `redpanda:9092`.
+- **The UDF sandbox has no DNS** (empty `resolv.conf` and `hosts`), so `kafka` doesn't resolve in a UDF, while the IP works. The Java scripts read a hosts file from BucketFS (`%jvmoption -Djdk.net.hosts.file=/buckets/bfsdefault/default/kafka/hosts`); the loader writes it with the broker's current IP (`podman inspect` in the VM through `exasol shell host`) at start and after an outage. The broker keeps advertising `kafka:9092`. The IP does change: it moved from 10.89.0.6 to 10.89.0.3 in the restart test.
 
 ### Persistence: sidecars keep nothing, Exasol keeps everything
 
-Sidecars can't keep files across restarts (no volumes; `exasol stop` removes their containers). So **Redpanda is only the transport, and Exasol is the system of record.** Everything that must survive a restart lives in Exasol:
+Sidecars can't keep files across restarts (no volumes; `exasol stop` removes their containers). So **Kafka is only the transport, and Exasol is the system of record.** Everything that must survive a restart lives in Exasol:
 
 | What | Where in Exasol | After a restart |
 |---|---|---|
-| Every inbound message | `INBOUND_MESSAGES`, with topic, topic id, partition and offset | Kept. Topics start empty. Messages Redpanda acknowledged but the loader hadn't imported yet (the last 3 to 5 s before `exasol stop`) are lost |
-| The loader's position per topic and partition | The last row per partition in the topic's staging table (`KAFKA_STAGE.<TOPIC>`), and the topic id in `KAFKA_STAGE.TOPICS` | **Resets by itself:** a recreated topic has a new topic id (Kafka assigns a UUID); the loader then empties the staging table and loads from offset 0 again. Tested on 2026-11-09 with a producer running through `exasol stop` and `start`: 69 acknowledged messages, none missing, each Kafka position loaded once, the loader reconnected by itself |
+| Every inbound message | `INBOUND_MESSAGES`, with topic, topic id, partition and offset | Kept. Topics start empty. Messages Kafka acknowledged but the loader hadn't imported yet (the last few seconds before `exasol stop`) are lost: 4 of 69 in the restart test with Apache Kafka. To avoid it, stop the producers first and wait until the loader has nothing left, then `exasol stop` |
+| The loader's position per topic and partition | The last row per partition in the topic's staging table (`KAFKA_STAGE.<TOPIC>`), and the topic id in `KAFKA_STAGE.TOPICS` | **Resets by itself:** a recreated topic has a new topic id (Kafka assigns a UUID); the loader then empties the staging table and loads from offset 0 again. Tested on 2026-11-09 with a producer running through `exasol stop` and `start`, with Redpanda and again with Apache Kafka: each Kafka position loaded once, the loader reconnected by itself and found the new topic id. Missing were only messages from the last seconds before the stop (see above) |
 | Incidents and their evidence | `INCIDENTS`, `INCIDENT_EVIDENCE` | Kept; active ones expire or clear by the normal rules |
 | What was published | `OUTBOUND_MESSAGES` | Kept. On start, still active incidents are published to `srti.confirmed` again, so subscribers see the current state |
 | Triggers, simulated time | `SCENARIO_LOG`, `SIM_STATE` | As today (runs don't resume) |
 | Offers and contracts | `DATA_OFFERS`, `CONTRACTS` | Kept |
-| Sidecar configuration | Not in files: arguments and environment in `sidecars.yaml` (Redpanda flags, Console's broker address) | Recreated from the definition |
+| Sidecar configuration | Not in files: arguments and environment in `sidecars.yaml` (Kafka listeners, Kafbat UI's broker address) | Recreated from the definition |
 
 This is also a point for the pitch: the audit trail a usage policy may require (what came in from whom, what went out to whom) is in one database, queryable with SQL.
 - Once a Kafka-compatible entry exists in the launcher's sidecar catalog, setup switches to `exasol sidecar enable`.
@@ -147,7 +148,7 @@ Not run in iteration 1: heavy, invisible on stage, and it needs an MDS identity.
 ### Order of work
 
 1. Event format: get a DFRS sample message from MDS; until then define the JSON from real DATEX II SRTI messages (Digitraffic).
-2. Redpanda sidecar: entry in `sidecars.yaml`, check from the laptop and from the database (`redpanda:9092`), memory in the VM; optionally Redpanda Console. Setup step in `AGENTS.md`.
+2. Kafka sidecar: entry in `sidecars.yaml`, check from the laptop and from the database (`kafka:9092`), memory in the VM; optionally a web UI. Setup step in `AGENTS.md`. **Done** (Apache Kafka and Kafbat UI).
 3. Loading: try the Exasol Kafka connector extension on Exasol Personal (Java UDFs, JAR in BucketFS); otherwise the Python consumer. Measure the time from message to row with a low `POLL_TIMEOUT_MS`. Test a restart: `exasol stop` and `start` with the simulator running, then check that no message is skipped or loaded twice and that active incidents are published again. **Done** except the republishing of incidents, which comes with step 5.
 4. Simulator: fake event sources per provider, background reports, trigger defaults per category, the steering options (`--providers`, `--sensor`, `--delay`, `--confidence`), road operator topic, `--transport`. Remove the probe vehicles.
 5. Combination SQL, reach from traffic volume, `INCIDENTS`, `INCIDENT_EVIDENCE`, publishing to `srti.confirmed`. Test all trigger types again (same list as the 2026-11-07 test), each with one provider (not confirmed) and two (confirmed).
@@ -160,9 +161,9 @@ Checked on 2026-11-09:
 
 - **Kafka connector license:** MIT. Release 2.0.1 of 26 Oct 2026, actively maintained.
 - **Offsets in the Kafka connector:** read from the target table (`KAFKA_PARTITION`, `KAFKA_OFFSET`) across all topics in it; no reset option. Solved with a staging table per topic and the topic id (see "Kafka").
-- **Does the connector run on Exasol Personal?** Yes, with the Java script language container and a hosts file for the name `redpanda` (see "Kafka").
-- **Latency of loading:** 3 to 5 s from send to row. What remains is the event delays per provider and the combination step (step 5).
-- **Redpanda's license:** fine for partners running it for their own service (see "Kafka"). A legal sign-off is still sensible.
+- **Does the connector run on Exasol Personal?** Yes, with the Java script language container and a hosts file for the name `kafka` (see "Kafka").
+- **Latency of loading:** 2 to 4 s from send to row. What remains is the event delays per provider and the combination step (step 5).
+- **Redpanda's license:** would have been fine for partners, but Redpanda was replaced by Apache Kafka for the sovereignty message (see "Kafka"). No license question left for the broker.
 - **EDC state (iteration 2):** in memory by default; SQL stores are PostgreSQL only. See "Connector".
 - **Memory in the macOS VM:** no problem, see "Kafka" (measured in step 2).
 

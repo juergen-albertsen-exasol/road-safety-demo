@@ -8,13 +8,13 @@ ROAD_SAFETY.INBOUND_MESSAGES (topic, topic id, partition, offset, Kafka timestam
 
 How positions survive restarts. The connector resumes from the highest KAFKA_OFFSET per partition
 in its target table, read across the whole table. So each topic gets its own staging table in
-KAFKA_STAGE, which only ever holds the current topic. Redpanda keeps nothing across
+KAFKA_STAGE, which only ever holds the current topic. Kafka keeps nothing across
 `exasol stop`: topics come back empty, with a new topic id and offsets from 0. When a topic's id
 differs from the one stored in KAFKA_STAGE.TOPICS, its staging table is emptied, so the import
 starts at 0 again. Everything already loaded is in INBOUND_MESSAGES.
 
-Name resolution. The UDF sandbox has no DNS, so the Java UDFs read `redpanda` from a hosts file
-in BucketFS (`jdk.net.hosts.file`). This script writes it with Redpanda's current IP on the
+Name resolution. The UDF sandbox has no DNS, so the Java UDFs read `kafka` from a hosts file
+in BucketFS (`jdk.net.hosts.file`). This script writes it with Kafka's current IP on the
 deployment network, at start and whenever an import can't resolve the name.
 
 The sys password is read from the deployment's secrets.json and never printed.
@@ -37,7 +37,7 @@ import pyexasol
 from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
 
 BROKER_LAPTOP = "127.0.0.1:19092"
-BROKER_DATABASE = "redpanda:9092"
+BROKER_DATABASE = "kafka:9092"
 GROUP_ID = "exasol-road-safety"
 DEPLOYMENTS = Path.home() / ".exasol" / "personal" / "deployments"
 HOSTS_FILE_IN_BUCKET = "bucketfs/bfsdefault/default/kafka/hosts"
@@ -74,9 +74,9 @@ def stage_table(topic: str) -> str:
 
 
 def write_hosts_file(deployment: str) -> str:
-    """Look up Redpanda's IP on the deployment network and write the hosts file the Java UDFs read."""
+    """Look up Kafka's IP on the deployment network and write the hosts file the Java UDFs read."""
     dep_id = json.loads((DEPLOYMENTS / deployment / "deployment.json").read_text())["deploymentId"]
-    container = f"exasol-db-{dep_id}-sidecar-redpanda"
+    container = f"exasol-db-{dep_id}-sidecar-kafka"
     fmt = "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"
     for engine in ("podman", "docker"):
         r = subprocess.run(["exasol", "shell", "host", "-d", deployment, "--", engine, "inspect", "-f", fmt, container],
@@ -85,11 +85,11 @@ def write_hosts_file(deployment: str) -> str:
         if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ip):
             break
     else:
-        sys.exit(f"error: can't find the IP of {container}; is the redpanda sidecar running? "
-                 f"(exasol sidecar status redpanda -d {deployment})")
+        sys.exit(f"error: can't find the IP of {container}; is the kafka sidecar running? "
+                 f"(exasol sidecar status kafka -d {deployment})")
     path = DEPLOYMENTS / deployment / "local/runtime/exa" / HOSTS_FILE_IN_BUCKET
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{ip} redpanda\n")
+    path.write_text(f"{ip} kafka\n")
     return ip
 
 
@@ -179,12 +179,13 @@ class Loader:
                 topic, n, secs = f.result()
                 print(f"{now()} {topic}: +{n} messages ({secs:.1f} s)", flush=True)
             except pyexasol.ExaQueryError as e:
-                msg = str(e)
+                msg = getattr(e, "message", "") or str(e)
                 if "resolvable" in msg or "UnknownHost" in msg:
                     ip = write_hosts_file(self.args.deployment)
-                    print(f"{now()} redpanda not resolvable in the UDFs, hosts file rewritten ({ip})", flush=True)
+                    print(f"{now()} kafka not resolvable in the UDFs, hosts file rewritten ({ip})", flush=True)
                 else:
-                    print(f"{now()} import failed: {msg.splitlines()[0][:300]}", flush=True)
+                    first = next((l.strip() for l in msg.splitlines() if l.strip()), type(e).__name__)
+                    print(f"{now()} import failed: {first[:300]}", flush=True)
 
     def run(self) -> None:
         while True:
@@ -211,13 +212,13 @@ def main() -> None:
     args.prefix = args.prefix or ["srti.", "datex."]
     args.exclude = set(args.exclude) | {"srti.confirmed"}  # our own outbound topic
     print(f"{now()} loading topics {', '.join(a + '*' for a in args.prefix)} every {args.interval:g} s", flush=True)
-    # Survive `exasol stop`/`start`: on any failure wait, look up Redpanda's IP again (it can change
+    # Survive `exasol stop`/`start`: on any failure wait, look up Kafka's IP again (it can change
     # when the sidecar is recreated) and reconnect to both.
     while True:
         try:
             ip = write_hosts_file(args.deployment)
             loader = Loader(args)
-            print(f"{now()} connected (redpanda at {ip} for the UDFs)", flush=True)
+            print(f"{now()} connected (kafka at {ip} for the UDFs)", flush=True)
             loader.run()
             return
         except KeyboardInterrupt:
@@ -225,7 +226,7 @@ def main() -> None:
         except (SystemExit, Exception) as e:  # noqa: BLE001 - the loader must keep going
             if args.once:
                 raise
-            print(f"{now()} waiting for the database and Redpanda: {str(e).splitlines()[0][:200] if str(e) else type(e).__name__}",
+            print(f"{now()} waiting for the database and Kafka: {str(e).splitlines()[0][:200] if str(e) else type(e).__name__}",
                   flush=True)
             time.sleep(10)
 
