@@ -34,6 +34,8 @@ Output files (-> table names after load, schema ROAD_DATA):
   traffic_hotspots.csv     TRAFFIC_HOTSPOTS     known congestion hotspots (data/source/traffic_hotspots.csv)
   segment_traffic.csv      SEGMENT_TRAFFIC      per main road segment: lanes, capacity, free speed, peak load,
                                                 direction, hotspot, real roadworks on the simulated day
+  places.csv               PLACES               named places from OSM for finding a spot by name: suburbs, villages,
+                                                motorway junctions and interchanges, railway stations, landmarks
   road_data_sources.csv    ROAD_DATA_SOURCES    source, license, URL and retrieval time per table
   districts.csv            DISTRICTS            copied from the Munich dataset (data/munich-dataset), so the
   roadworks.csv            ROADWORKS            schema is complete on its own
@@ -760,6 +762,72 @@ def _bearing(line) -> float:
     return math.degrees(math.atan2(x2 - x1, y2 - y1)) % 360
 
 
+# --------------------------------------------------------------------------- places
+PLACE_KINDS = {"city", "town", "village", "suburb", "quarter", "neighbourhood", "hamlet", "borough"}
+
+
+def places_part(args, out: Path, cache: Path, sources) -> None:
+    """Named places for the scenario trigger ("accident on the A9 near Garching"): nodes and areas from OSM."""
+    pbf = cache / "oberbayern-latest.osm.pbf"
+    if not pbf.exists():
+        sys.exit(f"error: {pbf} is missing; run the osm part once")
+    areas = out / "road_areas.csv"
+    with open(areas, encoding="utf-8") as f:
+        study = next(shp_wkt.loads(r["geometry_wkt"]) for r in csv.DictReader(f) if r["kind"] == "study_area")
+    shapely.prepare(study)
+    print(f"Reading named places from {pbf.name} ...")
+    found = {}
+    fp = (osmium.FileProcessor(str(pbf))
+          .with_areas(osmium.filter.KeyFilter("tourism", "leisure", "aeroway", "amenity"))
+          .with_filter(osmium.filter.KeyFilter("place", "highway", "railway", "tourism", "leisure", "aeroway", "amenity")))
+    for o in fp:
+        t = o.tags
+        name = t.get("name")
+        if not name:
+            continue
+        kind = None
+        if o.is_node():
+            if t.get("place") in PLACE_KINDS:
+                kind = t["place"]
+            elif t.get("highway") == "motorway_junction":
+                kind = "motorway_junction"
+            elif t.get("railway") == "station":
+                kind = "station"
+            elif t.get("tourism") == "attraction":
+                kind = "landmark"
+            if kind is None:
+                continue
+            lon, lat = o.location.lon, o.location.lat
+        elif o.is_area():
+            if t.get("leisure") == "stadium" or t.get("tourism") in ("attraction", "museum", "zoo", "theme_park") \
+                    or t.get("aeroway") == "aerodrome" or t.get("amenity") in ("university", "hospital"):
+                kind = "landmark"
+            else:
+                continue
+            try:
+                c = shapely.from_wkt(osmium.geom.WKTFactory().create_multipolygon(o)).centroid
+            except Exception:  # noqa: BLE001
+                continue
+            lon, lat = c.x, c.y
+        else:
+            continue
+        if not shapely.contains_xy(study, lon, lat):
+            continue
+        key = (name, kind)
+        if key not in found:
+            found[key] = {"name": name, "kind": kind, "ref": t.get("ref", ""), "lat": round(lat, 6), "lon": round(lon, 6)}
+    rows = [{"place_id": k, **v} for k, v in enumerate(sorted(found.values(), key=lambda r: (r["kind"], r["name"])), 1)]
+    write_csv(out / "places.csv", ["place_id", "name", "kind", "ref", "lat", "lon"], rows)
+    by = {}
+    for r in rows:
+        by[r["kind"]] = by.get(r["kind"], 0) + 1
+    print("  " + ", ".join(f"{v} {k}" for k, v in sorted(by.items(), key=lambda kv: -kv[1])))
+    sources.append({"table_name": "PLACES", "source": "OpenStreetMap via Geofabrik (oberbayern-latest.osm.pbf): place, "
+                    "motorway_junction, railway station and landmark names", "license": "ODbL 1.0",
+                    "attribution": "© OpenStreetMap contributors", "url": GEOFABRIK_URL,
+                    "retrieved_at": datetime.fromtimestamp(pbf.stat().st_mtime, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")})
+
+
 # --------------------------------------------------------------------------- main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -767,14 +835,14 @@ def main() -> int:
     ap.add_argument("--cache", default=str(Path.home() / ".cache" / "munich-road-data"), help="download cache")
     ap.add_argument("--districts", default=str(Path(__file__).resolve().parent.parent / "data" / "munich-dataset" / "districts.csv"),
                     help="districts.csv of MUNICH_DATASET (for the city boundary)")
-    ap.add_argument("--only", nargs="+", choices=["osm", "accidents", "weather", "autobahn", "traffic"],
+    ap.add_argument("--only", nargs="+", choices=["osm", "accidents", "weather", "autobahn", "traffic", "places"],
                     help="build only these parts (accidents needs osm in the same run for the segment match)")
     ap.add_argument("--weather-from", default="2022-01-01", help="first day of weather values (default 2022-01-01)")
     ap.add_argument("--accident-from", type=int, default=2016, help="first accident year (default 2016)")
     ap.add_argument("--bast-year", type=int, default=2024, help="year of the BASt hourly counts (default 2024)")
     ap.add_argument("--traffic-day", default="2026-10-27", help="simulated day: roadworks valid on it (default 2026-10-27)")
     args = ap.parse_args()
-    parts = set(args.only or ["osm", "accidents", "weather", "autobahn", "traffic"])
+    parts = set(args.only or ["osm", "accidents", "weather", "autobahn", "traffic", "places"])
 
     out, cache = Path(args.out).expanduser(), Path(args.cache).expanduser()
     out.mkdir(parents=True, exist_ok=True)
@@ -788,7 +856,7 @@ def main() -> int:
             sources = list(csv.DictReader(f))
 
     rebuilt = {"osm": ("ROAD_SEGMENTS", "ROAD_AREAS"), "accidents": ("ACCIDENTS",),
-               "weather": ("WEATHER_STATIONS", "WEATHER_10MIN", "WEATHER_VISIBILITY"), "autobahn": ("MOTORWAY_EVENTS",),
+               "weather": ("WEATHER_STATIONS", "WEATHER_10MIN", "WEATHER_VISIBILITY"), "autobahn": ("MOTORWAY_EVENTS",), "places": ("PLACES",),
                "traffic": ("TRAFFIC_PROFILE", "BAST_STATIONS", "TRAFFIC_HOTSPOTS", "SEGMENT_TRAFFIC")}
     drop = {t for p in parts for t in rebuilt[p]}
     sources = [s for s in sources if s["table_name"] not in drop]
@@ -817,6 +885,8 @@ def main() -> int:
         weather_part(args, out, cache, sources)
     if "autobahn" in parts:
         autobahn_part(args, out, study, sources)
+    if "places" in parts:
+        places_part(args, out, cache, sources)
     if "traffic" in parts:
         traffic_part(args, out, sources, bast_part(args, out, cache, sources))
 

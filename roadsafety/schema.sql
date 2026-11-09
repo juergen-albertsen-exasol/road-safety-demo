@@ -29,8 +29,8 @@ CREATE OR REPLACE TABLE ROAD_SAFETY.VEHICLES (
 -- Virtual sensors at real places taken from OSM (ROAD_DATA.ROAD_SEGMENTS).
 CREATE OR REPLACE TABLE ROAD_SAFETY.INFRA_SENSORS (
     "sensor_id"        VARCHAR(20) NOT NULL,
-    "sensor_type"      VARCHAR(20) NOT NULL,      -- road_weather, camera, loop_detector
-    "location_kind"    VARCHAR(20) NOT NULL,      -- isar_bridge, tunnel, motorway_entry
+    "sensor_type"      VARCHAR(20) NOT NULL,      -- road_weather, camera, loop_detector, warning_trailer
+    "location_kind"    VARCHAR(20) NOT NULL,      -- isar_bridge, bridge, motorway, tunnel, motorway_entry, mobile
     "sensor_name"      VARCHAR(200),
     "segment_id"       DECIMAL(9,0) NOT NULL,
     "provider_id"      VARCHAR(20) NOT NULL,
@@ -74,7 +74,8 @@ CREATE OR REPLACE TABLE ROAD_SAFETY.SENSOR_READINGS (
     "stationary_vehicle" BOOLEAN,                 -- camera
     "vehicle_count"    DECIMAL(5,0),              -- camera, loop_detector: vehicles on the segment
     "avg_speed_kmh"    DECIMAL(4,0),
-    "ingested_wall"    TIMESTAMP NOT NULL
+    "ingested_wall"    TIMESTAMP NOT NULL,
+    "works_active"     BOOLEAN                    -- warning_trailer: a road works site is set up here
 );
 
 -- Ground truth: every scenario injected on purpose. Written by `simulate_road_safety.py trigger`.
