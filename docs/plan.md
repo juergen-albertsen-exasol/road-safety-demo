@@ -2,7 +2,168 @@
 
 This is the working plan the demo was built from, kept as its design record. How to set up and run the demo is in [README.md](../README.md) and [AGENTS.md](../AGENTS.md); the background on the Mobility Data Space and DFRS is in [context.md](context.md).
 
-Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply.
+Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is planned, not built.
+
+## Revision 2026-11-09: a reference implementation for DFRS partners
+
+**Status: planned.**
+
+### The pitch
+
+Exasol shows a **reference implementation** that DFRS partners can take and run themselves: the service that receives safety events from several carmakers and road authorities, combines them into confirmed SRTI warnings, and publishes them back into the data space.
+
+- **Sovereign.** It runs on the partner's own machine or cloud account. Data stays with the partner and is exchanged directly with other partners, like the MDS itself: no central platform and no third-party service in between. Exasol Personal also deploys to the partner's own AWS, Azure, Exoscale or STACKIT account, so a European cloud is possible.
+- **Free for the first iteration.** Exasol Personal plus free components: the launcher (MIT), Dash Server (MIT), Redpanda Community Edition (free, source-available under the Business Source License), the Exasol Kafka connector extension (MIT), Python, OpenStreetMap and other open data. Free is the requirement; open source is welcome but not required.
+- **Ready to run.** Clone the repo, point your agent at it, say "set up the demo". The rules per SRTI category are SQL with parameters, so a partner can read, change and extend them.
+
+### What doesn't match DFRS today
+
+The current demo gets raw vehicle signals and vehicle positions into Exasol and detects hazards from them. A DFRS service provider or road authority never gets that data: each carmaker detects hazards in its own backend and shares **events** (SRTI category, position, direction, time, validity, confidence), not raw signals or trips. Vehicle positions are personal data and the carmaker's business data. So:
+
+| Today | DFRS reality | Change |
+|---|---|---|
+| Exasol detects hazards from raw signals | Carmakers send finished events | Exasol **combines** events from several providers and the road operator |
+| Evidence = individual vehicles | Evidence = events per provider | Evidence chain per provider and event |
+| Reach = vehicles within 2 km heading towards the hazard | Only each carmaker knows where its cars are | Reach **estimated from traffic volume** (`SEGMENT_TRAFFIC`, BASt counts) |
+| Incidents exist only as a live query | A service needs stable incidents and a lifecycle | `INCIDENTS` table, and confirmed warnings **published back** |
+| Data arrives by direct INSERT | Data arrives through the partner's EDC connector, Kafka extension | Kafka topics between the simulator and Exasol |
+
+### Target architecture
+
+```
+SIMULATED PARTNERS                        THE PARTNER'S OWN SETUP (the reference implementation)
+                                          ┌──────────────────────────────────────────────────────────┐
+carmakers OEM A–F, nav service           │  Redpanda (sidecar)       Exasol Personal                 │
+  fake SRTI events, steered ──events─────►│  srti.oem-a … srti.nav ──►  SRTI_EVENTS                   │
+road operator                             │  datex.road-operator  ──►  SENSOR_READINGS                │
+  sensors, warning trailers ─────────────►│                            │ SQL: combine, confirm,       │
+                                          │                            ▼ confidence, reach            │
+                                          │  srti.confirmed  ◄──────── INCIDENTS, INCIDENT_EVIDENCE   │
+                                          │        │                   │                              │
+                                          │        │            Dash Server: dashboard (read-only)    │
+                                          └────────┼──────────────────────────────────────────────────┘
+                                                   └──► (iteration 2: the partner's EDC connector → MDS)
+```
+
+The boundary of the box is the point: everything inside is what a partner runs; everything outside is what the data space delivers. In iteration 1 the outside is simulated; in iteration 2 the topics are fed by a real connector.
+
+### Data
+
+**Inbound events** (one Kafka topic per provider, JSON, modelled on the DATEX II SRTI profile until we have a real DFRS sample; field names kept in one place so they are easy to change). Real SRTI messages to model on: Finland's Digitraffic publishes them in DATEX II 3.5 and 3.7 (also over MQTT, CC BY 4.0); the categories follow the SRTI working group's message sets (DATEX II, DENM, TPEG-TEC): event id, provider, SRTI category, position (lat/lon, road segment if known), direction (heading), detection time, valid until, provider confidence, status (new, update, cancel), optional cause (ice, fluid).
+
+**Road operator** (topic `datex.road-operator`): sensor readings and alerts, warning trailers, as today.
+
+**Tables in Exasol:**
+
+| Table | Content |
+|---|---|
+| `SRTI_EVENTS` | Every inbound event as received, with topic, partition and offset (replaces `VEHICLE_SIGNALS` as the input to detection) |
+| `SENSOR_READINGS` | As today, now loaded from the road operator topic |
+| `INCIDENTS` | Confirmed incidents with a stable id and lifecycle: first event, confirmed, updated, cleared; category, cause, confidence, providers, reach |
+| `INCIDENT_EVIDENCE` | Which events and sensor readings support which incident |
+| `OUTBOUND_MESSAGES` | Every warning published to `srti.confirmed`, with its offset: the log of what was passed on |
+| `DATA_OFFERS`, `CONTRACTS` | Metadata only: which offers this partner has "negotiated" and under which usage policy (road safety only, credit the source). Shown on the dashboard, not enforced |
+
+### Simulator: fake event sources the presenter steers
+
+The sources don't simulate vehicles any more. They send **fake SRTI events** directly, the way a carmaker's backend would after its own detection, and the presenter steers them.
+
+- **Background false alarms:** now and then a single provider reports a hazard at a random spot where nothing happened (as when one car's ESC intervenes on a sharp bend), and no other provider or sensor reports the same. Such a lone report never meets the rule (2 providers, or 1 provider plus a sensor), so it never becomes an incident and is never published. On the map it stays a grey dot, "reported once, not confirmed": it shows that one source alone isn't trusted. It is also the test: a background report that turns red means the rules are too loose.
+- **Triggers** keep today's syntax and banner (`trigger oil_spill --road "Fürstenrieder Straße" --near "Laimer Platz"`). A trigger now makes the chosen providers publish events at that spot: new, updates while it lasts, cancel when it ends. Defaults per category say which providers report it, how many events and after how many seconds (for example the oil spill: OEM A after 20 s, OEM D after 50 s, then updates every 30 s).
+- **Steering on stage:** options to choose who reports, so the presenter can show the rule at work. `--providers OEM_A` (one provider: not confirmed), then `--providers OEM_A,OEM_D` (confirmed), `--sensor` (the road operator's sensor adds an alert), `--delay` and `--confidence` per provider. Claude maps plain requests to them ("only OEM A sees the oil", "now a second carmaker reports it").
+- **Provider profiles** stay plausible: the navigation service reports no accidents (no airbag data), OEM E and F report no weather categories.
+- The road operator publishes sensor readings and alerts as today; triggers switch its sensors at the spot.
+- `--transport kafka` (default once built) or `--transport direct` (INSERTs into `SRTI_EVENTS`, the fallback without Kafka). `SCENARIO_LOG` and the banners stay, and the combination SQL never reads `SCENARIO_LOG`.
+
+**What goes away:** the 6,000 probe vehicles, `VEHICLE_SIGNALS`, the traffic model's probe speeds and the raw-signal detection. With them go the live traffic colours and the diversions measured from probe speeds. Traffic volume for the reach estimate stays (`SEGMENT_TRAFFIC` from the open data). The old raw-signal version stays in git history.
+
+### Detection becomes combination
+
+The rules stay one SQL statement with parameters, per SRTI category. Typical rule: **confirmed when 2 providers report the same category within radius and time, or 1 provider plus a matching sensor alert**; the road operator alone confirms road works and wrong-way drivers (camera).
+
+- **Matching:** same category, within the category's radius (300 m for slippery road, 100 m for obstacles, a cell for fog and weather), compatible direction, overlapping validity.
+- **De-duplication:** updates of the same provider event replace each other; several events of one provider count once.
+- **Disagreement:** a provider's cancel removes its support; the incident clears when no supporting event is valid any more, or when providers that saw the spot report nothing (cleared by absence, as today).
+- **Confidence:** from the number of providers, their own confidence, sensor support and how fresh the events are.
+- **Cause** (ice or fluid): from the providers' cause field, else the road weather station or the DWD temperature.
+- **Accident → unmanaged blockage** after 10 min without a road operator response, as today.
+- **Reach:** vehicles per hour on the segments within 2 km leading to the incident (`SEGMENT_TRAFFIC` at the simulated time), times the remaining validity: "about 1,400 vehicles in the next 10 minutes".
+
+A scheduled step (every few seconds, run by the loader or a Lua script) turns the live result into `INCIDENTS` rows and writes new or changed incidents to `srti.confirmed`. The live views stay for the dashboard and the agent.
+
+### Kafka (Redpanda) as a sidecar
+
+- **Redpanda Community Edition**: speaks the Kafka protocol, one container, no JVM and no ZooKeeper, starts in seconds, runs with about 1 GB (`--mode dev-container --smp 1 --memory 1G`). Free to use, including in production; the Business Source License only forbids offering Redpanda itself as a streaming service to third parties, which a partner running it for its own service doesn't do. The license's Additional Use Grant only excludes a "Streaming or Queuing Service": a commercial offering that lets third parties use Redpanda's own functions. Each version becomes Apache 2.0 after four years. A legal sign-off is still sensible before partners rely on it. Clients only see Kafka, so a partner can swap in Apache Kafka (Apache 2.0) or a managed Kafka without changing anything else.
+- Optional second sidecar **Redpanda Console** (web UI on a loopback port): shows the topics and the messages arriving. Useful on stage ("here is what the carmakers send"); same license.
+- Added as a user entry `redpanda` in the deployment's `sidecars.yaml`. This is documented and supported in the launcher (`user-docs/content/sidecars.md` in exasol-personal): saved definitions are authoritative, user-added entries count as enabled, `exasol start -d road-safety-demo` starts them, `exasol sidecar status redpanda` reports them. `exasol sidecar enable` only accepts catalog names, so setup edits the file instead.
+- Networking: the database reaches the broker as `redpanda:9092` inside the deployment network; the simulator on the laptop uses the published port `127.0.0.1:19092`. Two listeners, each advertised with its own address. Readiness: a `tcpSocket` probe on the published port.
+- On macOS the sidecar runs in the database VM and takes memory from it.
+- **Loading into Exasol:** the Exasol Kafka connector extension (MIT, `exasol/kafka-connector-extension`; Java `SET` scripts `KAFKA_CONSUMER`, `KAFKA_IMPORT`, `KAFKA_METADATA`, the JAR in BucketFS; imports in batches every few seconds). It keeps no state of its own: the target table has the columns `KAFKA_PARTITION` and `KAFKA_OFFSET`, and each import continues after the highest offset per partition found there. Lower `POLL_TIMEOUT_MS` (default 30 s) so a run with few messages returns quickly. Fallback if it doesn't run on Exasol Personal: a small Python consumer in `scripts/` that loads micro-batches with pyexasol. Either way the loader keeps its position in Exasol, not in Redpanda (see the next section).
+- **Topic names carry the run id** (`srti.oem-a.<run>`, `srti.confirmed.<run>`): after a restart the topics are recreated empty at offset 0, while `SRTI_EVENTS` still holds higher offsets from the last run. A connector resuming from those would skip every new message. With the run id in the name, a new topic has no rows yet, so loading starts at 0. The architecture sketch shows the topics without the suffix.
+
+### Persistence: sidecars keep nothing, Exasol keeps everything
+
+Sidecars can't keep files across restarts (no volumes; `exasol stop` removes their containers). So **Redpanda is only the transport, and Exasol is the system of record.** Everything that must survive a restart lives in Exasol:
+
+| What | Where in Exasol | After a restart |
+|---|---|---|
+| Every inbound event | `SRTI_EVENTS`, with topic, partition and offset | Kept. Topics start empty; nothing is lost because everything received is already loaded |
+| The loader's position per topic and partition | Derived from `SRTI_EVENTS`: the highest `KAFKA_OFFSET` per topic and partition | **Resets by itself**: recreated topics start at offset 0, but they have a new name (the run id is part of it), so no offsets are stored for them yet and loading starts at 0. No separate offset table or generation id needed |
+| Incidents and their evidence | `INCIDENTS`, `INCIDENT_EVIDENCE` | Kept; active ones expire or clear by the normal rules |
+| What was published | `OUTBOUND_MESSAGES` | Kept. On start, still active incidents are published to `srti.confirmed` again, so subscribers see the current state |
+| Triggers, simulated time | `SCENARIO_LOG`, `SIM_STATE` | As today (runs don't resume) |
+| Offers and contracts | `DATA_OFFERS`, `CONTRACTS` | Kept |
+| Sidecar configuration | Not in files: arguments and environment in `sidecars.yaml` (Redpanda flags, Console's broker address) | Recreated from the definition |
+
+This is also a point for the pitch: the audit trail a usage policy may require (what came in from whom, what went out to whom) is in one database, queryable with SQL.
+- Once a Kafka-compatible entry exists in the launcher's sidecar catalog, setup switches to `exasol sidecar enable`.
+
+### Connector (EDC)
+
+Not run in iteration 1: heavy, invisible on stage, and it needs an MDS identity. The deck shows where it sits, the dashboard shows the `DATA_OFFERS` and `CONTRACTS` metadata. Iteration 2: an EDC connector as a further sidecar, connected to the MDS test environment, feeding the same topics. Persistence: EDC keeps contract negotiations and agreements in memory by default (lost on restart, so contracts would be negotiated again). Its SQL stores are written for the PostgreSQL dialect and only tested there, so Exasol as EDC's store is ruled out. Decision for iteration 2: renegotiate contracts on every start, or run the connector with a small PostgreSQL outside the sidecar model if renegotiating proves too slow or not allowed.
+
+### Dashboard
+
+- Inbound events as dots coloured by provider (instead of vehicles and raw signals); unconfirmed single reports grey; sensors as today; confirmed incidents red with a hover showing the evidence per provider and the reach estimate.
+- An "outbound" ticker: the warnings published to `srti.confirmed`.
+- A panel with the negotiated offers and their usage policies.
+- Background: roads coloured by modelled traffic volume at the simulated time (from `SEGMENT_TRAFFIC`), instead of live probe speeds.
+- Sliders: minimum providers, sensor may replace a provider (yes/no).
+
+### Iterations
+
+| | Iteration 1 (this plan) | Iteration 2 | Production at a partner |
+|---|---|---|---|
+| Runs on | A laptop, Exasol Personal | The partner's own cloud account, Exasol Personal (AWS, Azure, Exoscale, STACKIT) | The partner's infrastructure, sized for real volumes |
+| Inbound | Simulated carmakers and road operator → Kafka | An EDC connector with the Kafka extension, MDS test environment, real DFRS sample data | The partner's DFRS contracts |
+| Outbound | `srti.confirmed` topic | Published as a data offer through the connector | As iteration 2 |
+| Cost | Free | Free software, the partner's cloud costs | To be discussed with Exasol |
+
+### Order of work
+
+1. Event format: get a DFRS sample message from MDS; until then define the JSON from real DATEX II SRTI messages (Digitraffic).
+2. Redpanda sidecar: entry in `sidecars.yaml`, check from the laptop and from the database (`redpanda:9092`), memory in the VM; optionally Redpanda Console. Setup step in `AGENTS.md`.
+3. Loading: try the Exasol Kafka connector extension on Exasol Personal (Java UDFs, JAR in BucketFS); otherwise the Python consumer. Measure the time from message to row with a low `POLL_TIMEOUT_MS`. Test a restart: `exasol stop` and `start` with the simulator running, then check that no message is skipped or loaded twice and that active incidents are published again.
+4. Simulator: fake event sources per provider, background reports, trigger defaults per category, the steering options (`--providers`, `--sensor`, `--delay`, `--confidence`), road operator topic, `--transport`. Remove the probe vehicles.
+5. Combination SQL, reach from traffic volume, `INCIDENTS`, `INCIDENT_EVIDENCE`, publishing to `srti.confirmed`. Test all trigger types again (same list as the 2026-11-07 test), each with one provider (not confirmed) and two (confirmed).
+6. Dashboard: events by provider, outbound ticker, offers panel, traffic volume background.
+7. Docs: README (the pitch), `docs/context.md` (the mapping table and "what the demo doesn't show"), AGENTS.md (setup table, troubleshooting), the deck (setup, detection, a slide "what you receive and what you send", the iterations).
+
+### Open questions
+
+Checked on 2026-11-09:
+
+- **Kafka connector license:** MIT. Release 2.0.1 of 26 Oct 2026, actively maintained.
+- **Offsets in the Kafka connector:** read from the target table (`KAFKA_PARTITION`, `KAFKA_OFFSET`); no reset option. Solved by the run id in the topic names (see "Kafka").
+- **Redpanda's license:** fine for partners running it for their own service (see "Kafka"). A legal sign-off is still sensible.
+- **EDC state (iteration 2):** in memory by default; SQL stores are PostgreSQL only. See "Connector".
+
+Still open:
+
+- The real DFRS event format and fields: no public sample; ask MDS. Until then, model on Digitraffic's SRTI messages.
+- Does the Kafka connector extension run on Exasol Personal (Java UDFs, the JAR in BucketFS)? Nothing in the docs speaks against it; test in step 3.
+- Memory: Redpanda (about 1 GB) and optionally Console next to the database in the macOS VM; measure in step 2.
+- Latency: event delays plus Kafka plus batch loading; on stage the confirmation should come within about a minute of the trigger. Measure in steps 3 and 5.
 
 ## Revision 2026-11-07: safety events anywhere, derived from sensors
 
