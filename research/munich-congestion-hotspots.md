@@ -1,6 +1,6 @@
 # Congestion hotspots in Munich, and open traffic data
 
-Research for the traffic version of the road safety demo ([plan](../docs/road-safety-demo-plan.md)), 2026-11-06. **[V]** = checked on the source page, **[S]** = seen only in a search result. The INRIX corridor tables and some ADAC pages need JavaScript and could only be read in part.
+Research for the traffic version of the road safety demo ([plan](../docs/plan.md)), 2026-11-06. **[V]** = checked on the source page, **[S]** = seen only in a search result. The INRIX corridor tables and some ADAC pages need JavaScript and could only be read in part.
 
 ## Hotspots
 

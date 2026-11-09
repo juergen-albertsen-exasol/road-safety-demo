@@ -1,53 +1,98 @@
-<h1 align="center">Munich Mobility Agents</h1>
+# Munich Road Safety: live hazard detection on Exasol
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/kindl-exasol-dark.png">
-    <img src="docs/kindl-exasol-light.png" width="520" alt="Cartoon of a small robot dressed as the Münchner Kindl, with a light bulb above its head, pointing at the Exasol logo">
-  </picture>
-</p>
+A live demo of **Data for Road Safety (DFRS)**, the road safety use case of the [Mobility Data Space](docs/context.md): connected vehicles and road sensors report what they notice, and SQL in [Exasol](https://www.exasol.com) turns those signals into confirmed safety warnings on a live map of Munich, within seconds.
 
-<h3 align="center">A hands-on tutorial for AI-assisted analytics on Exasol Personal</h3>
+Say what happens and where, in plain words: *"a wrong-way driver on the A9 southbound near Garching"*, *"an oil spill on Fürstenrieder Straße near Laimer Platz"*. Your AI agent starts the simulated event, and the page shows the signals arriving, the sensors turning red, and the incident being confirmed. Hover over the incident to see the evidence behind it: which vehicles of which providers and which sensors reported it, how fast it was confirmed, and how many vehicles nearby would receive the warning.
 
-You load open data from the City of Munich into a local [Exasol](https://www.exasol.com) database on your laptop. Then you work with an AI coding agent, Codex or Claude Code, to build a series of live dashboards that answer one planning question, step by step:
+- **Real open data:** the OpenStreetMap road network of Munich and the motorway ring, City of Munich roadworks, Autobahn GmbH motorway events, DWD weather, BASt traffic counts, the accident atlas.
+- **Simulated:** 6,000 connected probe vehicles from seven fictional providers and 158 road sensors, each reporting every few seconds. Every hazard is started on purpose and marked as a simulation.
+- **Detected in SQL:** one rule per SRTI category confirms a hazard from several vehicles, providers and sensors, then computes its reach. The detection never reads which hazards were started.
 
-> **How well is each Munich district served by public transport, now and as the city grows to 2045, and what do the planned rail and tram projects change?**
+## Get started with your agent
 
-You describe what you want to see and why; the agent writes the SQL and the dashboards. The only prerequisite is the **[Exasol Personal Local Starter Kit](https://github.com/exasol-labs/exasol-personal-local-starterkit)**. The dataset is an 18 MB zip on this repo's [Releases page](https://github.com/exasol-labs/munich-mobility-planning-agents/releases).
+You need macOS or Linux, Python 3.10 or newer, about 12 GB of free disk space (10 GB for the database, 0.6 GB of downloads), and an AI coding agent such as [Claude Code](https://claude.com/claude-code) or Codex.
 
-## The path
+1. Clone this repo and open your agent in it.
+2. Say **"Set up the demo."**
 
-1. [Set up the Exasol Personal Local Starter Kit](tutorial/01-setup-starter-kit.md): database, Dash Server, your agent connected over MCP
-2. [Load the Munich data](tutorial/02-load-data.md): download the zip, load it with `exakit data-load`
-3. [First questions](tutorial/03-first-questions.md): get to know the data with your agent
-4. [v1: today, per resident](tutorial/04-v1-residents.md)
-5. [v2: residents and jobs](tutorial/05-v2-jobs.md)
-6. [v3: forecast to 2045](tutorial/06-v3-forecast.md)
-7. [v4: rail and tram scenarios](tutorial/07-v4-scenarios.md)
-8. [v5: an assistant on the page](tutorial/08-v5-assistant.md) (needs an OpenAI API key)
-9. [The cycling series: your turn](tutorial/09-cycling-series.md)
-10. [Troubleshooting](tutorial/10-troubleshooting.md)
+The agent follows [AGENTS.md](AGENTS.md). It installs and starts the database, downloads and loads the open data, creates the simulation, starts Dash Server and deploys the dashboard. It checks each step and asks before installing anything on your machine.
 
-<p align="center">
-  <img src="docs/dashboard-v5.png" width="640" alt="The v5 dashboard for 2045: a map of the 25 districts colored by public transport places per resident and job against the 2024 average, the 'Change since 2024' chart, and an Ask panel. The assistant has put a hypothetical U-Bahn ring and 10-minute S-Bahn service on the map.">
-  <br>
-  <em>The dashboard after the tutorial is complete. The assistant has put a hypothetical what-if on the map: a U-Bahn ring and S-Bahn trains every 10 minutes.</em>
-</p>
+Then say **"Start the simulation"** and open <http://127.0.0.1:5100/apps/munich-road-conditions>.
 
-## Repo map
+## What runs where
 
-| Path | What it is |
+```
+open data (OSM, city, Autobahn, DWD, BASt) --prepare_road_data.py--> CSV --load_road_data.sh--> ROAD_DATA
+                                                                                                  |
+simulate_road_safety.py run      ---- vehicle signals, sensor readings every 2 s ---->  ROAD_SAFETY
+simulate_road_safety.py trigger  ---- "start an oil spill here" (SCENARIO_LOG)          |
+                                                                                        |  SQL: hazards, reach,
+Dash Server: munich-road-conditions  <---- read-only (dash_readonly) -----------------  evidence, traffic, diversions
+Your agent  <---- MCP: exasol-personal (SQL), dash-server (dashboard) ----
+```
+
+| Component | What it is |
 |---|---|
-| [tutorial/](tutorial/) | The chapters above |
-| [AGENTS.md](AGENTS.md) | Standing instructions for the agent: ground rules, the data, building on Dash Server |
-| [data/](data/README.md) | The table reference, the data model, sources and licenses, and the curated list of rail and tram projects |
-| [research/](research/README.md) | The research behind the forecast and the scenarios, the reference numbers, and the context pack for the v5 assistant |
-| [secrets/](secrets/README.md) | Where your OpenAI key goes (gitignored) |
-| [scripts/prepare_dataset.py](scripts/prepare_dataset.py) | Optional: rebuilds the dataset from the Munich open data portal download |
+| [Exasol Personal](https://github.com/exasol/exasol-personal) | The database, a local deployment named `road-safety-demo` on 127.0.0.1:8563. Its MCP server (port 4896) lets the agent run SQL |
+| [exapump](https://github.com/exasol-labs/exapump) | Loads the CSVs and runs ad-hoc SQL (profile `road-safety-demo`) |
+| [Dash Server](https://github.com/exasol-labs/dash-server) | Hosts the dashboard on <http://127.0.0.1:5100>; the agent deploys it over MCP |
+| `.venv` | Python for data preparation, the simulator and setup (`requirements.txt`) |
 
-## About the data
-The MVV data is the **scheduled** timetable. It has no passenger counts, delays or crowding, so "well served" means *capacity offered*, not use. Jobs per district are a modeled city estimate, and the population between 2024 and 2045 is interpolated to the official forecast.
+## Set up by hand
 
-## Sources and links
-- **Data:** the Munich open data portal ([opendata.muenchen.de](https://opendata.muenchen.de)), the MVV GTFS timetable, the City of Munich's Demografiebericht and Erwerbstätigenprognose. Details and licenses are in [data/README.md](data/README.md).
-- **Tools:** [Exasol Personal](https://www.exasol.com/personal/) · [Starter Kit](https://github.com/exasol-labs/exasol-personal-local-starterkit) · [Dash Server](https://github.com/exasol-labs/dash-server) · [Exasol MCP server](https://github.com/exasol/mcp-server)
+The same steps your agent runs. Commands are run from the repo folder.
+
+```bash
+# 1. Database: install the Exasol Personal launcher (https://github.com/exasol/exasol-personal), then
+exasol install local -d road-safety-demo
+exasol mcp enable -d road-safety-demo
+
+# 2. Python and exapump (https://github.com/exasol-labs/exapump)
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python scripts/setup_access.py          # creates the exapump profile road-safety-demo
+
+# 3. Open data: download and prepare (data/road-data), then load into ROAD_DATA
+.venv/bin/python scripts/prepare_road_data.py
+scripts/load_road_data.sh
+
+# 4. Simulation: schema ROAD_SAFETY, vehicles, sensors, detection views
+.venv/bin/python scripts/simulate_road_safety.py setup
+.venv/bin/python scripts/simulate_road_safety.py views
+.venv/bin/python scripts/setup_access.py          # again: now also creates the read-only dashboard user
+
+# 5. Dash Server, cloned next to this repo
+git clone https://github.com/exasol-labs/dash-server ../dash-server
+(cd ../dash-server && python3 -m venv .venv && .venv/bin/pip install -e .)
+scripts/start_dash_server.sh                      # keep it running
+
+# 6. Dashboard: ask your agent to "deploy the dashboard" (Dash Server MCP; see AGENTS.md)
+```
+
+## Run the demo
+
+```bash
+.venv/bin/python scripts/simulate_road_safety.py run --start 07:30 --speed 3 --log events   # keep it running
+.venv/bin/python scripts/simulate_road_safety.py trigger wrong_way_driver --road A9 --near Garching-Süd --direction south
+.venv/bin/python scripts/simulate_road_safety.py trigger oil_spill --road "Fürstenrieder Straße" --near "Laimer Platz"
+.venv/bin/python scripts/simulate_road_safety.py stop-all
+```
+
+On stage you don't type these: you tell the agent what happens and where, and it explains the simulation, runs the trigger and reports what the SQL detected. Event types: `wrong_way_driver`, `accident`, `slippery_road` (ice), `oil_spill`, `debris`, `animal`, `roadworks`, `fog`, `storm`. `scenarios` lists them with the places they fit. See [AGENTS.md](AGENTS.md#running-the-demo) for the flow.
+
+## Repo layout
+
+| Path | Content |
+|---|---|
+| `AGENTS.md` | Instructions for the agent: setup, demo rules, troubleshooting |
+| `dashboard/` | The Dash app `munich-road-conditions`: `app.py` and its SQL in `queries/` |
+| `roadsafety/` | SQL templates: schema, hazard detection, reach, evidence, traffic, diversions (with a Python routing UDF) |
+| `scripts/` | `prepare_road_data.py`, `load_road_data.sh`, `simulate_road_safety.py` (with `road_scenarios.py`, `road_traffic.py`), `build_dashboard_queries.py`, `setup_access.py`, `start_dash_server.sh` |
+| `data/source/` | Small inputs kept in git: city districts, city roadworks, congestion hotspots |
+| `research/` | The open data sources with licenses and limits; the Munich congestion hotspots |
+| `docs/` | [context.md](docs/context.md): the Mobility Data Space and DFRS. [plan.md](docs/plan.md): the design and how it evolved |
+
+## Data and licenses
+
+Road network © OpenStreetMap contributors (ODbL 1.0). City districts and roadworks: Landeshauptstadt München (dl-de/by-2.0). Motorway events © Die Autobahn GmbH des Bundes (GeoNutzV). Weather: Deutscher Wetterdienst (CC BY 4.0). Traffic counts: Bundesanstalt für Straßenwesen (CC BY 4.0). Accident atlas: Statistische Ämter des Bundes und der Länder (dl-de/by-2.0). Details per dataset in [research/road-data-sources.md](research/road-data-sources.md).
+
+The vehicles, providers and sensors are fictional. No real vehicle data is used.

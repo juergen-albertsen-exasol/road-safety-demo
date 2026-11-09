@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "exasol-personal": {
+      "type": "http",
+      "url": "http://127.0.0.1:4896/mcp"
+    },
+    "dash-server": {
+      "type": "http",
+      "url": "http://127.0.0.1:5100/mcp"
+    }
+  }
+}

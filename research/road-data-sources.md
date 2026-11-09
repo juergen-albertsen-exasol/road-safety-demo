@@ -1,6 +1,6 @@
 # Open data for the road safety demo
 
-Research for step 1 of the [road safety demo plan](../docs/road-safety-demo-plan.md): which real open data the demo uses, where it comes from, its license, how current it is and what it can't tell us. Checked on 2026-11-06. "Verified" means the endpoint was called or the file was downloaded and read on that day.
+Research for step 1 of the [road safety demo plan](../docs/plan.md): which real open data the demo uses, where it comes from, its license, how current it is and what it can't tell us. Checked on 2026-11-06. "Verified" means the endpoint was called or the file was downloaded and read on that day.
 
 The vehicle and sensor stream is synthetic (schema `ROAD_SAFETY`). Everything below is real.
 
@@ -9,8 +9,8 @@ The vehicle and sensor stream is synthetic (schema `ROAD_SAFETY`). Everything be
 | Layer | Source | License | How current | Verified |
 |---|---|---|---|---|
 | Road network, forests and parks | OpenStreetMap, Geofabrik extract Oberbayern | ODbL 1.0 | Daily; checked file contains OSM data up to 2026-11-04 | Download page and state file |
-| City boundary, districts | `DISTRICTS` from the Munich dataset, copied into `ROAD_DATA` | dl-de/by-2.0 | Current boundaries | Loaded |
-| City roadworks | `ROADWORKS` from the Munich dataset (Munich open data, Baustellen), copied into `ROAD_DATA` | dl-de/by-2.0 | Snapshot of the dataset build, 5,702 rows | Loaded |
+| City boundary, districts | `DISTRICTS`, City of Munich open data (`data/source/districts.csv`), copied into `ROAD_DATA` | dl-de/by-2.0 | Current boundaries | Loaded |
+| City roadworks | `ROADWORKS`, City of Munich open data, Baustellen (`data/source/roadworks.csv`), copied into `ROAD_DATA` | dl-de/by-2.0 | Snapshot taken 2026-10-21, 5,702 rows | Loaded |
 | Motorway roadworks, closures, warnings | Autobahn GmbH, offer "Die Autobahn App" on Mobilithek; JSON endpoint `verkehr.autobahn.de` | GeoNutzV (per the Mobilithek offer) | Live | Endpoint called for the A9 |
 | Weather | DWD Climate Data Center, station 3379 München-Stadt (and 1262 München-Flughafen) | CC BY 4.0 | 10-minute values, historical up to 2025-12-31, "recent" up to yesterday | Files downloaded and read |
 | Accident history | Unfallatlas of the Statistical Offices of the Federation and the Länder | dl-de/by-2.0 | Yearly, 2016–2025 for Bavaria | 2025 file downloaded and read |
@@ -24,10 +24,10 @@ The vehicle and sensor stream is synthetic (schema `ROAD_SAFETY`). Everything be
 - **Tools:** neither `osmium` nor GDAL is installed. `prepare_road_data.py` uses `pyosmium` and `shapely` from the project `.venv`.
 - **What it can't tell us:** traffic volumes, the condition of the road surface, or where sensors really are. The sensor positions in the demo are virtual, placed at real OSM features.
 
-## City roadworks: `ROADWORKS` from the Munich dataset
+## City roadworks: `ROADWORKS`
 
-- Munich open data portal, Baustellen, dl-de/by-2.0. 5,702 current and planned roadworks with dates, impact and centroid. Details are in [data/README.md](../data/README.md).
-- **Limit:** a snapshot from when the dataset was built, not a live feed. It shows today's roadworks, not those of the simulated weather day (2025-01-10). The dashboard should say so.
+- Munich open data portal, Baustellen, dl-de/by-2.0. 5,702 current and planned roadworks with dates, impact and centroid. Details are in [data/source/README.md](../data/source/README.md).
+- **Limit:** a snapshot taken on 2026-10-21, not a live feed. The simulated day (2026-10-27 by default) is close to it, so the roadworks active on that day fit; on another `--weather-day` they may not. Refresh the file from the portal before a talk if needed (see the README there).
 
 ## Motorways: Autobahn GmbH
 

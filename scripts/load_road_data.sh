@@ -4,13 +4,13 @@
 # Existing tables are dropped and reloaded, so the script can be run again after a new prepare run.
 #
 #   scripts/load_road_data.sh [PROFILE] [FOLDER]
-#   scripts/load_road_data.sh road-safety-demo ~/road-data
+#   scripts/load_road_data.sh road-safety-demo data/road-data
 #
 # PROFILE is an exapump connection profile (exapump profile list) with write access.
 set -euo pipefail
 
 PROFILE="${1:-road-safety-demo}"
-FOLDER="${2:-$HOME/road-data}"
+FOLDER="${2:-$(cd "$(dirname "$0")/.." && pwd)/data/road-data}"
 SCHEMA="ROAD_DATA"
 
 shopt -s nullglob

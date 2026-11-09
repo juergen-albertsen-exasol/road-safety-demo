@@ -2,7 +2,7 @@
 """Simulate connected vehicles and road sensors in Munich for the road safety demo (schema ROAD_SAFETY).
 
 Everything this script writes is SYNTHETIC. The road network, weather and accident history it builds
-on are real open data in ROAD_DATA (scripts/prepare_road_data.py). Plan: docs/road-safety-demo-plan.md.
+on are real open data in ROAD_DATA (scripts/prepare_road_data.py). Design: docs/plan.md.
 
     .venv/bin/python scripts/simulate_road_safety.py setup            # schema, providers, vehicles, sensors
     .venv/bin/python scripts/simulate_road_safety.py run              # background stream, Ctrl-C to stop

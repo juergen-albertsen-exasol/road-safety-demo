@@ -1,76 +1,95 @@
 # AGENTS.md
 
-Standing instructions for an AI coding agent (Codex, Claude Code or another client) working in this repo. The repo is a tutorial: the user works through [tutorial/](tutorial/) and describes what they want to see. You decide how to build it. The repo contains no dashboard code; every dashboard is written by you, in the user's session.
+Standing instructions for an AI coding agent (Claude Code, Codex or another client) working in this repo. Claude Code and Codex read this file automatically when started in the repo folder.
 
-- **Codex** and **Claude Code** read this file automatically when started in the repo folder.
+**What this repo is:** a live demo of Data for Road Safety (DFRS) on Exasol. Simulated connected vehicles and road sensors stream signals into a local Exasol database; SQL detects the eight SRTI hazard categories from those signals; a Dash dashboard shows them live on a map of Munich. Background: [docs/context.md](docs/context.md). Design and history: [docs/plan.md](docs/plan.md). Overview for people: [README.md](README.md).
+
+The user is usually a presenter preparing or giving a talk. Two kinds of requests: **setting the demo up** on a fresh machine, and **running it** on stage.
 
 ## Ground rules
 
-- **Dashboards run on Dash Server only.** Build them with the `dash-server` MCP tools. Don't produce a chat artifact, an HTML file, an image, an inline chart, a Streamlit or Flask app, or a Markdown table presented as a dashboard. If the dash-server tools are missing, follow [MCP servers missing](tutorial/10-troubleshooting.md#mcp-servers-missing) and ask the user to restart the session.
-- **SQL is read-only.** Run analysis SQL through the `exasol` MCP server, whose login can only read. You never write to the database. Loading data is the user's step (chapter 2).
-- **Show your work.** Show each SQL statement before you interpret its result. Explain modeling choices in plain words, and say which ones are assumptions.
-- **No secrets.** Don't read, print, copy or ask for the OpenAI key or the database password, and don't put them in files or on a command line. The key lives in `secrets/openai_api_key` (gitignored); you may only check that the file exists. If the user offers to paste a key into the chat, point them to [secrets/README.md](secrets/README.md).
-- **Metric units:** area in km², density in residents per km², lengths in m (km for city totals), durations in minutes. Never hectares, miles or feet.
-- **State the limits of the data** whenever a question touches them: the MVV data is the scheduled timetable, with no passengers, crowding, delays or live traffic. Jobs are a modeled estimate. Population between 2024 and 2045 is interpolated.
-- **Each version builds on the previous one.** When the user asks for the next version, start from the app you built before and keep what works.
+- **Never print, copy or ask for a password.** The `sys` password lives in `~/.exasol/personal/deployments/road-safety-demo/secrets.json`, the dashboard password in `secrets/dash_readonly_password`. Scripts read them; you don't. Never put a password on a command line or in a file outside those places.
+- **Analysis SQL is read-only.** Answer questions with `SELECT` through the `exasol-personal` MCP server (or `exapump sql -p road-safety-demo` when MCP isn't available). Writes happen only through the repo's scripts: loading (`load_road_data.sh`), the simulator (`simulate_road_safety.py`) and `setup_access.py`.
+- **Every hazard is a visible simulation.** Before each trigger, say in two or three plain lines that this is a simulation, what it injects (which signals, where) and that it writes no hazard: detection is left to the SQL. After the trigger, show its SIMULATION banner line.
+- **Show your SQL** before you interpret a result. State what the data can't say: the vehicles and sensors are synthetic; traffic volume follows real counts but is modelled; roadworks are a snapshot.
+- **Metric units:** m and km, km/h, seconds and minutes, °C.
+- **Ask before installing software** (the Exasol Personal launcher, exapump, Dash Server) or changing anything outside this repo. Everything inside the repo and the database deployment `road-safety-demo` is yours to set up.
+
+## Setting up the demo
+
+When the user says "set up the demo" (or similar), work through these steps in order. **Check first, act only if needed**: every step can be skipped if its check already passes, so the same procedure also repairs a half-finished setup. After each step, report one line. Stop and explain if a step fails twice.
+
+| # | Check | If it fails |
+|---|---|---|
+| 1 | `exasol version` works | Ask to install the Exasol Personal launcher: <https://github.com/exasol/exasol-personal> (release binary for the platform, on the PATH) |
+| 2 | `exasol status -d road-safety-demo` says running | Not installed: `exasol install local -d road-safety-demo` (takes several minutes, needs about 10 GB). Stopped: `exasol start -d road-safety-demo` |
+| 3 | `exasol mcp status -d road-safety-demo` serves on port 4896 | `exasol mcp enable -d road-safety-demo` |
+| 4 | `exapump --version` works | Ask to install exapump: <https://github.com/exasol-labs/exapump> |
+| 5 | `.venv/bin/python -c "import osmium, shapely, pyexasol"` works | `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` |
+| 6 | `exapump profile show road-safety-demo` works | `.venv/bin/python scripts/setup_access.py` (creates the profile; warns that the schemas don't exist yet, which is fine here) |
+| 7 | `ROAD_DATA` has 15 tables with rows: `SELECT TABLE_NAME, TABLE_ROW_COUNT FROM EXA_ALL_TABLES WHERE TABLE_SCHEMA = 'ROAD_DATA'` | `.venv/bin/python scripts/prepare_road_data.py` (downloads about 600 MB into `~/.cache/munich-road-data`, writes `data/road-data/`), then `scripts/load_road_data.sh`. Run it in the background and report progress |
+| 8 | `.venv/bin/python scripts/simulate_road_safety.py status` shows vehicles and the views exist (`ROAD_SAFETY.V_HAZARD_REACH`) | `simulate_road_safety.py setup`, then `simulate_road_safety.py views` |
+| 9 | User `DASH_READONLY` exists (`EXA_DBA_USERS`) and `secrets/dash_readonly_password` exists | `.venv/bin/python scripts/setup_access.py` |
+| 10 | Dash Server answers on <http://127.0.0.1:5100> | Ask to clone and install it next to this repo: `git clone https://github.com/exasol-labs/dash-server ../dash-server && (cd ../dash-server && python3 -m venv .venv && .venv/bin/pip install -e .)`. Then start it in the background: `scripts/start_dash_server.sh` |
+| 11 | The `dash-server` and `exasol-personal` MCP tools are available in this session | Both are registered in `.mcp.json`. The client loads them at start: ask the user to restart the session (Claude Code: approve the project MCP servers when asked), then continue from here |
+| 12 | `apps_list` shows `munich-road-conditions` | Deploy the dashboard, see below |
+
+At the end, give the URL <http://127.0.0.1:5100/apps/munich-road-conditions> and say how to start the simulation.
+
+### Deploying the dashboard
+
+The source is `dashboard/`: `app.py`, `requirements.txt`, `dash-app.json` (profile `road-safety-demo`) and `queries/` with `sql_smoke.json` (sample parameters for the healthcheck).
+
+1. New app: `app_create_from_files` with name `munich-road-conditions`, title "Munich Road Conditions", template `exasol-analytics`, and every file from `dashboard/` (`dash-app.json` binds the profile `road-safety-demo`). Dash Server adds `dash_server_exasol.py`, the query helper `app.py` imports. Existing app: `app_put_files` with the changed files.
+2. `app_deploy_draft{name: "munich-road-conditions", deployment_target: "live", auto_rollback_on_health_failure: true}`. The result includes validation and the healthcheck.
+3. If it fails: `app_tail_logs` or `app_inspect_traceback`, fix, deploy again. Warnings about unreferenced SQL files or unbounded queries can be ignored: the app loads its queries through the helper.
+
+The composite queries (`hazards_live.sql`, `hazard_evidence.sql`, `traffic_state.sql`, `congestion.sql`, `diversions.sql`) are generated from `roadsafety/`. After changing a template there, run `.venv/bin/python scripts/build_dashboard_queries.py dashboard/queries` and `simulate_road_safety.py views`, then redeploy. Keep `dashboard/` as the source of truth: when you change the live app, change the repo file too.
+
+## Running the demo
+
+**Start:** check that the database and Dash Server run, then start the simulator in the background:
+
+```bash
+.venv/bin/python scripts/simulate_road_safety.py run --start 07:30 --speed 3
+```
+
+It writes a batch every 2 seconds and keeps running until stopped. `status` shows the run and the simulated time; `speed <factor>` changes the speed while it runs. The presenter may prefer a second terminal with `--log events`, which prints event signals, sensor alerts and confirmed incidents.
+
+**A trigger request** ("a wrong-way driver on the A9 southbound near Garching", "oil on Fürstenrieder Straße near Laimer Platz"):
+
+1. Map the words to one event, road, place and direction. Event types and aliases: `wrong_way_driver` (wrong_way), `accident` (crash), `slippery_road` (ice), `oil_spill` (oil), `debris` (obstacle), `animal`, `roadworks` (works), `fog` (visibility), `storm` (weather). `simulate_road_safety.py scenarios` lists where each fits.
+2. If the wording leaves the spot open, run with `--dry-run` first and say where it lands ("Fürstenrieder Straße southbound near Laimer Platz, 4 road segments"). If the command says the road doesn't pass the place or the event doesn't fit the road, propose something close instead of forcing it.
+3. Announce the simulation (see ground rules), then run `simulate_road_safety.py trigger <event> --road <road> --near <place> [--direction <dir>]` and show the banner.
+4. Watch for the confirmation: poll `ROAD_SAFETY.V_HAZARD_REACH` every few seconds in the background (up to about 3 minutes) and report category, cause, time from first signal to confirmation, vehicles, providers, sensors, confidence and the reach. Busy motorways confirm in seconds; quiet streets without a sensor can take a minute or two.
+
+`trigger <event> --stop` ends one event, `stop-all` ends all of them. Hazards then clear one after another as vehicles pass without reporting them.
+
+**Questions during the demo** ("why was it confirmed?", "who gets warned?", "only count hazards that 3 providers confirm"): answer from the views with SQL. `V_HAZARD_EVIDENCE` has every signal and sensor reading behind a hazard. The thresholds are parameters of the templates in `roadsafety/hazards.sql`; the dashboard has sliders for providers and vehicles.
 
 ## The data
 
-Schema `MUNICH_DATASET`, 20 tables. [data/README.md](data/README.md) describes the tables and sources; [data/data-model.md](data/data-model.md) documents every column. Read the data model before the first query.
+| Schema | Content |
+|---|---|
+| `ROAD_DATA` | Real open data: `ROAD_SEGMENTS` (OSM roads split into segments, with class, one-way, speed limit, bridge, tunnel), `ROAD_AREAS`, `PLACES` (805 named places for `--near`), `DISTRICTS`, `ROADWORKS`, `MOTORWAY_EVENTS`, `ACCIDENTS`, `WEATHER_*`, `TRAFFIC_PROFILE`, `BAST_STATIONS`, `TRAFFIC_HOTSPOTS`, `SEGMENT_TRAFFIC`, `ROAD_DATA_SOURCES` (source and license per table) |
+| `ROAD_SAFETY` | The simulation: `DATA_PROVIDERS`, `VEHICLES`, `INFRA_SENSORS`, `VEHICLE_SIGNALS`, `SENSOR_READINGS`, `SCENARIO_LOG` (what was triggered: the ground truth), `SIM_STATE` (the simulated "now"); views `V_HAZARDS_LIVE`, `V_HAZARD_REACH`, `V_HAZARD_EVIDENCE` |
 
-**Where things are:**
-- Districts, their area, polygons and centroids: `DISTRICTS`. Population counts and the official 2045 forecast: `DISTRICT_POPULATION`. Jobs (2022 estimate and 2040 forecast): `DISTRICT_EMPLOYMENT`.
-- The scheduled timetable: the `MVV_*` GTFS tables. Capacity of one scheduled trip: `VEHICLE_CAPACITY` per mode, with per-line overrides in `LINE_CAPACITY`.
-- Planned rail and tram projects: `PT_PROJECT_STATIONS`, one row per station and line, with the research behind it in [research/pt-projects-notes.md](research/pt-projects-notes.md).
-- Cycling: `CYCLING_INFRASTRUCTURE`, `BIKE_COUNT_STATIONS`, `BIKE_COUNTS_DAILY`, `BIKE_COUNTS_15MIN`. Roadworks: `ROADWORKS`.
+Sources, licenses and limits: [research/road-data-sources.md](research/road-data-sources.md).
 
 **SQL quirks:**
-- Column names are lowercase and must be double-quoted (`"district_no"`). Schema and table names are upper case and unquoted.
+- Column names are lowercase and must be double-quoted (`"hazard_type"`); schema and table names are upper case and unquoted.
 - Don't use reserved words such as `year`, `hour`, `day`, `value`, `count`, `type` or `name` as aliases.
-- The exasol MCP tool rejects a top-level `UNION ALL`; put it inside a CTE. For regular expressions use `REGEXP_INSTR(x, 'pattern') > 0`.
-- Every point table has `district_no` (1–25), so district rollups are equality joins.
-- For anything per district, use stops with `in_munich = 1`. `COALESCE("parent_station", "stop_id")` groups platforms into a station.
-- Use `MVV_ROUTES."line_mode"` (S-Bahn, U-Bahn, Regional rail, Tram, Bus), not `route_mode`.
+- "Now" is the simulated time in `SIM_STATE`, not the wall clock.
+- The detection SQL must never read `SCENARIO_LOG`. Comparing detections with `SCENARIO_LOG` afterwards is fine, and a good way to show what was injected and what was found.
+- The templates in `roadsafety/` use pyexasol placeholders (`{window_min!d}`); `simulate_road_safety.py views` fills them with the defaults.
 
-**Facts to respect:**
-- **The reference weekday is Wednesday 21 Oct 2026.** The GTFS feed covers 1 Sep–30 Nov 2026. Use the services that run on that date (`MVV_CALENDAR` with `wednesday = 1` and the date in range, plus the additions and minus the removals in `MVV_CALENDAR_DATES`), so the numbers don't depend on the day the tutorial is run.
-- **A departure is weighted by capacity.** One scheduled trip offers the capacity of its line (`LINE_CAPACITY`) or, without an override, of its mode (`VEHICLE_CAPACITY`). These are planning values, not passengers.
-- **Population and jobs:** residents are counted for 2015, 2024 and 2025 and forecast for 2045; jobs are estimated for 2022 and forecast for 2040. The model starts from the 2024 count (jobs: the 2022 estimate as the 2024 baseline) and interpolates linearly to 2045 (jobs to 2040), so the 2025 count is not used. Jobs after 2040 stay at the 2040 value.
-- **Projects** have an opening year (`opening_year_model`, 2040 where none is published), sometimes a later risk year, a status and a funding flag. Service comes from a published frequency (trains per hour, peak and off-peak, per direction) or, without one, from an existing analog line. Rows with `station_name = 'unknown'` have no published stations.
+## Troubleshooting
 
-## Building on Dash Server
-
-1. `apps_list`. If the app doesn't exist: `app_create_exasol_dashboard` with profile `starter-kit`. Never create a second app for the same version.
-2. Delete the scaffold's sample queries (`queries/business/*`, `queries/system/*`) with `app_delete_file`; one of them fails its own smoke test.
-3. Write the files with `app_put_files`. Put queries in `queries/*.sql` with pyexasol placeholders (`{year!d}`, `{w!f}`, `{ids!s}`) and sample values in `queries/sql_smoke.json` for the healthcheck. Run them with the helper the scaffold writes (`dash_server_exasol.py`); never write a connection, DSN or password into the app. Use plain ASCII spaces in code: `app_put_files` can drop non-breaking spaces.
-4. To start from the previous version, read its files with `app_list_files` and `app_read_file`.
-5. `app_deploy_draft{name, deployment_target: "live", auto_rollback_on_health_failure: true}`, then `app_run_healthcheck`. On Windows: `app_build` → `app_run_healthcheck` → `app_promote_revision`.
-6. If something fails, read `app_tail_logs` or `app_inspect_traceback`, fix and deploy again. On "license limit of 20 parallel connections" or a git conflict, wait a few seconds and retry once.
-7. Give the user the URL, `http://127.0.0.1:5100/apps/<app>` (the port is in `exakit status --json`).
-
-**Dash pitfalls:**
-- On the initial callback, give every output the first view depends on a concrete value. `no_update` there leaves the page blank.
-- Break loops between a store and the controls with `ctx.triggered_id`.
-- Don't scroll the page from a callback.
-- To test a page in a headless browser, start Chrome with software WebGL (SwiftShader), or maps stay empty. Use a separate browser profile, never the user's open tabs.
-
-**Every dashboard in the tutorial:**
-- uses the same look as the ones before it, so the series reads as one product;
-- ends with an "SQL executed" foldout that lists each statement the page ran, with its parameters, rows and duration, and the SQL text as sent;
-- carries a short caveat line on what the data can't say.
-
-## Checking results
-
-[research/reference-numbers.md](research/reference-numbers.md) has the numbers from one worked implementation of the tutorial. Your modeling choices may differ, so treat them as a reference: compare, and when you are far off, explain which choice causes the difference and let the user decide.
-
-## Running the whole tutorial
-
-When the user asks you to run the tutorial end to end, work through the chapters in order. Use each chapter's prompts as the user's requests and its **Look at it** section to check your result. Stop where only the user can act: installing the kit (chapter 1), restarting the session after `exakit mcp-setup`, downloading and loading the data (chapter 2), and putting the OpenAI key in place (chapter 8). Without a key, build v5 anyway and show a setup line where the assistant would be. After each chapter, report one line: what you built and the URL. At the end, list all URLs and anything skipped, with the reason.
-
-## Guardrails
-
-| The user asks | Expected behavior |
+| Symptom | Cause and fix |
 |---|---|
-| "Delete the roadworks that have already finished." | Refuse: the login is read-only. Offer a filtered `SELECT` instead. |
-| "Which district has the worst traffic right now?" | Explain that there is no live traffic, delay or passenger data. Offer the scheduled-service view. |
-| "Create a dashboard." (nothing else) | Ask one clarifying question, then build it on Dash Server. |
+| The `exasol-personal` MCP server fails with ECONNREFUSED | The database or its MCP sidecar isn't running: `exasol start -d road-safety-demo`, then `exasol mcp status -d road-safety-demo` |
+| The dashboard is empty or frozen | The simulator isn't running (`simulate_road_safety.py status`), or the database is stopped |
+| The dashboard page shows an error, while the healthcheck is fine | The healthcheck doesn't run callbacks: read `app_tail_logs` |
+| "license limit of 20 parallel connections", or a git conflict in Dash Server | Wait a few seconds and retry once |
+| A trigger is never confirmed | Check that the simulator runs and that vehicles pass the spot (quiet side streets have few). Look at `VEHICLE_SIGNALS` near the spot since the trigger |
+| pyexasol bulk import fails on the version string of Exasol Personal | Known; the simulator uses multi-row INSERTs instead. Don't switch it to `import_from_iterable` |

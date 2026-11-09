@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Download the open data for the road safety demo and turn it into flat CSVs for schema ROAD_DATA.
 
-Sources, licenses and limits: research/road-data-sources.md. The plan: docs/road-safety-demo-plan.md.
+Sources, licenses and limits: research/road-data-sources.md. The design: docs/plan.md.
 
-    python3 -m venv .venv && .venv/bin/pip install osmium shapely pyexasol
-    .venv/bin/python scripts/prepare_road_data.py --out ~/road-data
-    scripts/load_road_data.sh road-safety-demo ~/road-data
+    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+    .venv/bin/python scripts/prepare_road_data.py
+    scripts/load_road_data.sh
 
-The database is an Exasol Personal deployment (`exasol install local`), loaded with exapump;
-`road-safety-demo` is the exapump profile for it. No starter kit needed.
+The database is an Exasol Personal deployment (`exasol install local -d road-safety-demo`), loaded with
+exapump; `road-safety-demo` is the exapump profile for it.
 
-The study area is the city of Munich (union of the 25 districts from MUNICH_DATASET's
-districts.csv) plus the full motorway ring: the convex hull of the city and the A99,
+The study area is the city of Munich (union of the 25 districts in data/source/districts.csv)
+plus the full motorway ring: the convex hull of the city and the A99,
 buffered by 2 km. Inside the city every road for cars is kept; outside it the main roads (motorways to
 tertiary roads), so that diversions around the motorway ring exist.
 
@@ -37,8 +37,8 @@ Output files (-> table names after load, schema ROAD_DATA):
   places.csv               PLACES               named places from OSM for finding a spot by name: suburbs, villages,
                                                 motorway junctions and interchanges, railway stations, landmarks
   road_data_sources.csv    ROAD_DATA_SOURCES    source, license, URL and retrieval time per table
-  districts.csv            DISTRICTS            copied from the Munich dataset (data/munich-dataset), so the
-  roadworks.csv            ROADWORKS            schema is complete on its own
+  districts.csv            DISTRICTS            copied from data/source: the 25 city districts and the city's
+  roadworks.csv            ROADWORKS            roadworks (City of Munich open data portal, see data/source/README.md)
 
 Run with --only to rebuild single parts, e.g. `--only autobahn` right before a talk.
 """
@@ -73,7 +73,7 @@ except ImportError as e:  # pragma: no cover
 csv.field_size_limit(min(sys.maxsize, 2**31 - 1))
 
 ROOT = Path(__file__).resolve().parent.parent
-USER_AGENT = "munich-mobility-agents/1.0 (road safety demo data preparation)"
+USER_AGENT = "munich-road-safety-demo/1.0 (open data preparation)"
 BERLIN = ZoneInfo("Europe/Berlin")
 NOW = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -831,10 +831,10 @@ def places_part(args, out: Path, cache: Path, sources) -> None:
 # --------------------------------------------------------------------------- main
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--out", default=str(Path.home() / "road-data"), help="flat output folder")
+    ap.add_argument("--out", default=str(Path(__file__).resolve().parent.parent / "data" / "road-data"), help="flat output folder")
     ap.add_argument("--cache", default=str(Path.home() / ".cache" / "munich-road-data"), help="download cache")
-    ap.add_argument("--districts", default=str(Path(__file__).resolve().parent.parent / "data" / "munich-dataset" / "districts.csv"),
-                    help="districts.csv of MUNICH_DATASET (for the city boundary)")
+    ap.add_argument("--districts", default=str(Path(__file__).resolve().parent.parent / "data" / "source" / "districts.csv"),
+                    help="the 25 city districts with polygons (for the city boundary); roadworks.csv is read from the same folder")
     ap.add_argument("--only", nargs="+", choices=["osm", "accidents", "weather", "autobahn", "traffic", "places"],
                     help="build only these parts (accidents needs osm in the same run for the segment match)")
     ap.add_argument("--weather-from", default="2022-01-01", help="first day of weather values (default 2022-01-01)")
@@ -866,7 +866,7 @@ def main() -> int:
         shutil.copyfile(munich / name, out / name)
         print(f"  {name:26s} copied from {munich}")
         sources = [s for s in sources if s["table_name"] != table] + [{
-            "table_name": table, "source": "City of Munich open data portal (via the Munich dataset)",
+            "table_name": table, "source": "City of Munich open data portal (data/source)",
             "license": "dl-de/by-2-0", "attribution": "Landeshauptstadt München, dl-de/by-2-0",
             "url": "https://opendata.muenchen.de", "retrieved_at": NOW}]
 
