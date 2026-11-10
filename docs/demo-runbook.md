@@ -70,7 +70,7 @@ T2:
 ./demo sim run --start 07:30 --log events
 ```
 
-> "Now the other partners start sending: it's 7:30 on a Tuesday in October in Munich, with the real weather of that day. The road operator's sensors send a reading every minute, and now and then a single carmaker reports something nobody else sees: a false alarm. No hazard yet: I'll trigger those."
+> "Now the other partners start sending: it's 7:30 on a Tuesday in October in Munich, with the real weather of that day. The road operator's sensors send a reading every minute: that's the grey line here, 158 readings, no alerts. And now and then a single carmaker reports something nobody else sees: a false alarm. No hazard yet: I'll trigger those."
 
 ### 3. Dashboard v1, built live (3 min)
 

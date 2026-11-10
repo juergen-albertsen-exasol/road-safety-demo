@@ -21,7 +21,7 @@ ROAD_SAFETY.INBOUND_MESSAGES; combining the events into confirmed warnings is up
 --false-alarms (single unconfirmed reports per simulation hour, default 20), --transport kafka|direct
 (direct writes the same messages into INBOUND_MESSAGES, without Kafka and the loader). --log prints
 every message sent: red = caused by a triggered scenario, yellow = a single false alarm that should
-never be confirmed, grey = routine sensor readings (--log events leaves those out).
+never be confirmed, grey = routine sensor readings (--log events sums them up in one line per minute).
 
 Background false alarms: now and then one provider reports a hazard where nothing happened (one car's
 ESC on a sharp bend). Nobody else reports it, so it must never become an incident.
@@ -687,7 +687,8 @@ class MessageLog:
     def legend(self):
         print(self.c(self.BOLD, "Message log: ") + self.c(self.RED, "red = reports of a triggered scenario, ")
               + self.c(self.YELLOW, "yellow = a single false alarm (must not be confirmed), ")
-              + self.c(self.GREY, "grey = routine sensor readings"), flush=True)
+              + self.c(self.GREY, "grey = routine sensor readings" + (" (one line per minute)" if self.mode == "events" else "")),
+              flush=True)
 
     def events(self, msgs):
         lines = []
@@ -702,8 +703,11 @@ class MessageLog:
         if lines:
             print("\n".join(lines), flush=True)
 
+    SENSOR_LABEL = {"road_weather": "road weather", "camera": "cameras", "loop_detector": "loop detectors",
+                    "warning_trailer": "trailers"}
+
     def readings(self, rows):
-        lines = []
+        lines, alerts = [], 0
         for r in rows:
             alarm = []
             f, s = r["friction"], r["surface_temp_c"]
@@ -717,6 +721,7 @@ class MessageLog:
                 alarm.append("STATIONARY VEHICLE")
             if r["works_active"]:
                 alarm.append("ROAD WORKS SET UP")
+            alerts += bool(alarm)
             if self.mode == "events" and not alarm:
                 continue
             vals = (f"surface {s:.1f}C friction {f:.2f} visibility {r['visibility_m']:.0f} m" if s is not None
@@ -725,6 +730,13 @@ class MessageLog:
             line = (f"{r['ts']:%H:%M:%S} ROAD_OP SENSOR {r['sensor_id']:<7} {str(self.names.get(r['sensor_id'], ''))[:40]:<40} "
                     f"{vals}" + ("  " + ", ".join(alarm) if alarm else ""))
             lines.append(self.c(self.RED + self.BOLD if alarm else self.GREY, line))
+        if rows and self.mode == "events":          # the routine readings in one line, so the road operator shows
+            kinds: dict[str, int] = {}
+            for r in rows:
+                kinds[r["sensor_type"]] = kinds.get(r["sensor_type"], 0) + 1
+            per = ", ".join(f"{n} {self.SENSOR_LABEL.get(k, k)}" for k, n in sorted(kinds.items(), key=lambda x: -x[1]))
+            lines.insert(0, self.c(self.GREY, f"{rows[0]['ts']:%H:%M:%S} ROAD_OP SENSORS {len(rows)} readings ({per}), "
+                                              f"{alerts or 'no'} alert{'' if alerts == 1 else 's'}  -> {ev.TOPICS['ROAD_OP']}"))
         if lines:
             print("\n".join(lines), flush=True)
 
