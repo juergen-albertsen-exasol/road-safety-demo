@@ -45,6 +45,7 @@ Optional: a terminal with `./demo sidecar logs -f` (the service: one line per pu
 ### 1. The node
 
 ```bash
+exasol status
 exasol sidecar status
 ```
 
@@ -110,6 +111,12 @@ Run the first one twice, a few seconds apart: the counts grow. `exit` leaves the
 - `INBOUND_MESSAGES`: every message, raw, with its Kafka offset
 - `SRTI_EVENTS`: the same, parsed into columns, with SQL
 - Exasol keeps everything: the record
+- `status`: one report (`event_id`), several messages
+  - `new`: first report of a hazard by one provider; every false alarm is only a `new`
+  - `update`: the same report again, about every 30 s: current position, more vehicles, longer validity
+  - `cancel`: the provider withdraws it (hazard over, provider dropped out)
+  - Expiry sends nothing: the report just runs out (false alarms after 10 min)
+- The combination counts only the latest version of each report, unless it's a `cancel` or expired
 
 ### 5. Explore the data with the agent
 
