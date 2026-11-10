@@ -67,7 +67,7 @@ LAYERS = [("simulation", "Triggered events (simulation)"), ("events", "Reports f
           ("warnings", "Warnings received: warned stretch, message signs")]
 DIVERT = {"unprotected_accident_area", "unmanaged_blockage", "obstacle_on_road"}   # categories you drive around
 DIVERSION_COLOR = "#16a34a"
-WARNED_COLOR = "#f97316"          # the stretch before an incident where drivers get the warning
+WARNED_COLOR = "#ea580c"          # the stretch before an incident where drivers get the warning
 SIGN_COLOR = "#0e7490"            # the road operator's message signs
 CONSUMER_LABEL = {"OEM_A": "OEM A", "OEM_B": "OEM B", "OEM_C": "OEM C", "OEM_D": "OEM D", "OEM_E": "OEM E",
                   "OEM_F": "OEM F", "NAV": "Navigation", "ROAD_OP": "Road operator"}
@@ -442,7 +442,7 @@ def rule_text(h):
 
 # Fixed trace slots, always in this order (empty when a layer is off or has no data), so that a refresh can
 # send only the slots that change: the traffic volume roads are by far the biggest and change once an hour.
-SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "warned", "diversions", "simulation", "sensors",
+SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "diversions", "warned", "simulation", "sensors",
          "sensor_alarm", "signs", "singles"] + \
         [f"prov:{p}" for p in PROVIDER_COLOR] + [f"inc:{c}" for c in CATEGORY]
 VOLUME_SLOTS = {"vol:quiet", "vol:busy", "vol:heavy"}
@@ -538,7 +538,7 @@ def map_traces(d, layers, members):
             lat += [p[1] for p in line] + [None]
             hover += [text] * len(line) + [None]
     tr["warned"] = go.Scattermap(lat=lat, lon=lon, mode="lines", name="Warned stretch",
-                                 line=dict(width=12, color=WARNED_COLOR), opacity=0.35, text=hover, hoverinfo="text",
+                                 line=dict(width=11, color=WARNED_COLOR), opacity=0.7, text=hover, hoverinfo="text",
                                  connectgaps=False)
     signs = [r for r in d["receipts"] if r["consumer"] == "ROAD_OP" and r.get("sign_text") and r["status"] != "cleared"
              and r.get("sign_lat") is not None] if "warnings" in layers else []
@@ -654,7 +654,7 @@ def create_dash_app(server, url_base_pathname, metadata):
            *[html.Span([html.I(style={"background": v[1]}), f"traffic: {v[3]}"]) for v in VOLUME.values()],
            html.Span([html.I(style={"background": "#d97706"}), "roadworks"]),
            html.Span([html.I(style={"background": DIVERSION_COLOR, "height": "5px"}), "suggested diversion"]),
-           html.Span([html.I(style={"background": WARNED_COLOR, "height": "8px", "opacity": "0.5"}), "warned stretch"]),
+           html.Span([html.I(style={"background": WARNED_COLOR, "height": "8px", "opacity": "0.7"}), "warned stretch"]),
            html.Span([html.I(style={"background": SIGN_COLOR, "borderRadius": "50%"}), "message sign switched"])],
         className="legend")
 

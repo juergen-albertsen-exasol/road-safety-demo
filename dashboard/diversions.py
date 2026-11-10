@@ -161,8 +161,13 @@ class RoadGraph:
             if label and not self._same_road(t, road):
                 by_name[label] = by_name.get(label, 0.0) + t["len"]
         via = [n for n, m in sorted(by_name.items(), key=lambda x: -x[1]) if m >= 80][:3]
+        # Draw only the part off the blocked road: from where it turns off to where it rejoins (the stretch before
+        # the turn-off is the warned stretch, drawn on its own). The length and time above cover the whole route.
+        off = [not self._same_road(self.seg[s], road) for s, _ in path]
+        first = next((i for i, o in enumerate(off) if o), 0)
+        last = len(off) - next((i for i, o in enumerate(reversed(off)) if o), 0)
         lines = []
-        for s, f in path:
+        for s, f in path[first:last]:
             pts = self.seg[s]["pts"]
             lines.append(pts if f else pts[::-1])
         return {"path": path, "km": length / 1000, "extra_min": max(0.0, (secs - normal_secs) / 60),
