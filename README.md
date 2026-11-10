@@ -17,7 +17,11 @@ How it is built, what we measured and what is still open: **[docs/architecture.m
 
 You need macOS or Linux, Python 3.10 or newer, about 12 GB of free disk space (10 GB for the database, 0.6 GB of downloads), and an AI coding agent such as [Claude Code](https://claude.com/claude-code) or Codex.
 
-1. Clone this repo and open your agent in it.
+1. Clone this repo and open your agent in it:
+   ```bash
+   git clone https://github.com/exasol-labs/road-safety-demo.git
+   cd road-safety-demo
+   ```
 2. Say **"Set up the demo."**
 
 The agent follows [AGENTS.md](AGENTS.md). It installs and starts the database and the Kafka sidecars, downloads and loads the open data, creates the simulation, starts Dash Server and deploys the dashboard. It checks each step and asks before installing anything on your machine.
