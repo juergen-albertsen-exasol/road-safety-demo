@@ -165,7 +165,7 @@ Agent:
 
 | After the trigger | What you see |
 |---|---|
-| at once | v2: dashed outline *SIMULATION: oil spill*; T2: the banner |
+| at once | v2: a grey circle *SIMULATION: oil spill*; T2: the banner |
 | about 10 s | OEM A's report: grey dot in v2, blue dot in v1, red line in T2 |
 
 - Through Kafka into Exasol in seconds
