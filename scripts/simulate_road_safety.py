@@ -18,14 +18,14 @@ ROAD_SAFETY.INBOUND_MESSAGES; combining the events into confirmed warnings is up
 
 `run` options: --speed (simulation seconds per wall second, default 1), --seed, --weather-day
 (default 2026-10-27), --start (local time, default 06:00), --tick (wall seconds per batch, default 1),
---false-alarms (single unconfirmed reports per simulation hour, default 360: one every 10 s), --transport kafka|direct
+--false-alarms (single unconfirmed reports per simulation hour, default 60: one a minute), --transport kafka|direct
 (direct writes the same messages into INBOUND_MESSAGES, without Kafka and the loader). --log prints
 every message sent: red = caused by a triggered scenario, yellow = a single false alarm that should
 never be confirmed, grey = routine sensor readings (--log events prints them in one short line per second).
 
 Background false alarms: one provider reports a hazard where nothing happened (one car's ESC on a sharp
-bend). Nobody else reports it, so it must never become an incident. The default is one every 10 seconds,
-far more than in reality, so there is always something to see. At that rate, two of them would often land
+bend). Nobody else reports it, so it must never become an incident. The default is one a minute,
+more than in reality, so there is always something to see. At that rate, two of them could land
 close together by chance and be confirmed (as two independent sources should be), so the simulator keeps
 each false alarm out of the grouping radius of the active false alarms and triggered hazards of its category.
 
@@ -1145,8 +1145,8 @@ def main() -> int:
     p.add_argument("--start", default="06:00", help="local start time of the simulation")
     p.add_argument("--tick", type=float, default=1.0, help="wall seconds per batch")
     p.add_argument("--duration", type=float, default=0, help="stop after this many simulation seconds")
-    p.add_argument("--false-alarms", type=float, default=360.0,
-                   help="single unconfirmed reports per simulation hour (default 360: one every 10 s, a demo rate)")
+    p.add_argument("--false-alarms", type=float, default=60.0,
+                   help="single unconfirmed reports per simulation hour (default 60: one a minute, a demo rate)")
     p.add_argument("--transport", choices=["kafka", "direct"], default="kafka",
                    help="kafka (default): one topic per provider; direct: straight into INBOUND_MESSAGES")
     p.add_argument("--verbose", action="store_true")

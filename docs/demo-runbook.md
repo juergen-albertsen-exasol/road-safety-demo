@@ -63,7 +63,7 @@ T2:
 - 7:30 on a Tuesday in October; real weather of that day
 - Grey lines: the road operator's 158 sensors, each once a minute: a steady stream
 - Yellow: false alarms, one carmaker alone
-- One every 10 s: a demo rate, far higher than in reality
+- About one a minute: a demo rate, higher than in reality
 - No hazard yet: those I trigger
 
 ### 3. Kafka: a tour of Kafbat UI
