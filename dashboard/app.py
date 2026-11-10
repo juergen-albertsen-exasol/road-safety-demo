@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import plotly.graph_objects as go
-from dash import Dash, Input, Output, Patch, ctx, dash_table, dcc, html
+from dash import Dash, Input, Output, Patch, State, ctx, dash_table, dcc, html
 from dash.exceptions import PreventUpdate
 
 _HELPER_SPEC = importlib.util.spec_from_file_location(
@@ -446,6 +446,7 @@ SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "divers
          "sensor_alarm", "signs", "singles"] + \
         [f"prov:{p}" for p in PROVIDER_COLOR] + [f"inc:{c}" for c in CATEGORY]
 VOLUME_SLOTS = {"vol:quiet", "vol:busy", "vol:heavy"}
+SLOTS_KEY = ",".join(SLOTS)    # a page loaded with another order of slots gets the full map, never a patch
 
 
 def simulation(d, layers):
@@ -538,7 +539,7 @@ def map_traces(d, layers, members):
             lat += [p[1] for p in line] + [None]
             hover += [text] * len(line) + [None]
     tr["warned"] = go.Scattermap(lat=lat, lon=lon, mode="lines", name="Warned stretch",
-                                 line=dict(width=11, color=WARNED_COLOR), opacity=0.7, text=hover, hoverinfo="text",
+                                 line=dict(width=9, color=WARNED_COLOR), opacity=0.5, text=hover, hoverinfo="text",
                                  connectgaps=False)
     signs = [r for r in d["receipts"] if r["consumer"] == "ROAD_OP" and r.get("sign_text") and r["status"] != "cleared"
              and r.get("sign_lat") is not None] if "warnings" in layers else []
@@ -654,7 +655,7 @@ def create_dash_app(server, url_base_pathname, metadata):
            *[html.Span([html.I(style={"background": v[1]}), f"traffic: {v[3]}"]) for v in VOLUME.values()],
            html.Span([html.I(style={"background": "#d97706"}), "roadworks"]),
            html.Span([html.I(style={"background": DIVERSION_COLOR, "height": "5px"}), "suggested diversion"]),
-           html.Span([html.I(style={"background": WARNED_COLOR, "height": "8px", "opacity": "0.7"}), "warned stretch"]),
+           html.Span([html.I(style={"background": WARNED_COLOR, "height": "8px", "opacity": "0.5"}), "warned stretch"]),
            html.Span([html.I(style={"background": SIGN_COLOR, "borderRadius": "50%"}), "message sign switched"])],
         className="legend")
 
@@ -741,6 +742,7 @@ def create_dash_app(server, url_base_pathname, metadata):
         html.Div(CAVEAT, className="caveat"),
         html.Div(ATTRIBUTION, className="attrib"),
         dcc.Interval(id="tick", interval=REFRESH_MS, n_intervals=0),
+        dcc.Store(id="map-slots", data=SLOTS_KEY),
     ], className="page")
 
     def rule_of(min_providers, sensor_replaces):
@@ -772,8 +774,9 @@ def create_dash_app(server, url_base_pathname, metadata):
         Output("sql", "children"),
         Input("tick", "n_intervals"), Input("layers", "value"), Input("tabs", "value"),
         Input("min-providers", "value"), Input("sensor-replaces", "value"),
+        State("map-slots", "data"),
     )
-    def refresh(n, layers, tab, min_providers, sensor_replaces):
+    def refresh(n, layers, tab, min_providers, sensor_replaces, slots_key):
         if tab != "map" and ctx.triggered_id in ("tick", "tabs"):
             raise PreventUpdate                      # the map tab is hidden: don't query for it
         layers = set(layers or [])
@@ -865,7 +868,7 @@ def create_dash_app(server, url_base_pathname, metadata):
                 "the default rule (2 providers, a sensor may replace one).")
 
         traces = map_traces(d, layers, members)
-        full = ctx.triggered_id != "tick" or (n or 0) % FULL_EVERY == 0
+        full = ctx.triggered_id != "tick" or (n or 0) % FULL_EVERY == 0 or slots_key != SLOTS_KEY
         map_out = map_figure(traces) if full else map_patch(traces)
         return kpi_row, map_out, cards, outbound, offers, note, sql_foldout(log)
 

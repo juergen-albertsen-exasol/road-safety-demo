@@ -81,21 +81,31 @@ class RoadGraph:
     def _same_road(self, s, t):
         return (s["ref"] and s["ref"] == t["ref"]) or (s["name"] and s["name"] == t["name"])
 
+    def _travel(self, sid, fwd):
+        s = self.seg[sid]
+        return s["hdg"] if fwd else (s["hdg"] + 180) % 360
+
     def _walk(self, sid, fwd, metres, back):
-        """Follow the same road back (or ahead) from the blocked segment for about `metres`: (node, metres, segments)."""
+        """Follow the road back (or ahead) from the blocked segment for about `metres`: the same road by name or
+        number, else the straightest continuation (up to 50 degrees). Returns (end node, metres, segments, nodes);
+        nodes are [(node, metres so far, segments so far)] along the way."""
         s = self.seg[sid]
         node = (s["a"] if fwd else s["b"]) if back else (s["b"] if fwd else s["a"])
-        done, path, prev = 0.0, [], s
+        done, path, prev, prev_fwd, nodes, seen = 0.0, [], s, fwd, [(node, 0.0, [])], {sid}
         while done < metres:
-            nxt = [(t, f, n) for t, f, n in (self.into if back else self.out).get(node, ())
-                   if t != prev["id"] and self._same_road(self.seg[t], prev)]
-            if not nxt:
+            here = self._travel(prev["id"], prev_fwd)
+            cands = [(t, f, n) for t, f, n in (self.into if back else self.out).get(node, ()) if t not in seen]
+            same = [c for c in cands if self._same_road(self.seg[c[0]], prev)]
+            pick = same or [c for c in cands if _angle(self._travel(c[0], c[1]), here) <= 50]
+            if not pick:
                 break
-            t, f, n = min(nxt, key=lambda x: _angle(self.seg[x[0]]["hdg"], prev["hdg"]))
+            t, f, n = min(pick, key=lambda c: _angle(self._travel(c[0], c[1]), here))
             done += self.seg[t]["len"]
             path.append((t, f))
-            prev, node = self.seg[t], n
-        return node, done, path
+            seen.add(t)
+            prev, prev_fwd, node = self.seg[t], f, n
+            nodes.append((node, done, list(path)))
+        return node, done, path, nodes
 
     def upstream(self, lat, lon, hdg, metres=2000):
         """The stretch of the same road before the incident, against the traffic: where drivers get warned."""
@@ -103,7 +113,7 @@ class RoadGraph:
         if hit is None:
             return []
         sid, fwd = hit
-        _, _, path = self._walk(sid, fwd, metres, back=True)
+        _, _, path, _ = self._walk(sid, fwd, metres, back=True)
         lines = []
         for s, f in [(sid, fwd)] + path:
             pts = self.seg[s]["pts"]
@@ -111,11 +121,14 @@ class RoadGraph:
         return lines
 
     # ---- routing
-    def route(self, start, goal, banned, max_cost=3600.0):
-        dist, prev, heap = {start: 0.0}, {}, [(0.0, start)]
+    def route(self, start, goals, banned, max_cost=3600.0):
+        """The cheapest path from start to the first of `goals` it reaches: (goal, [(segment, forward)]) or None."""
+        goals = set(goals) - {start}
+        dist, prev, heap, hit = {start: 0.0}, {}, [(0.0, start)], None
         while heap:
             c, n = heapq.heappop(heap)
-            if n == goal:
+            if n in goals:
+                hit = n
                 break
             if c > dist.get(n, 1e18) or c > max_cost:
                 continue
@@ -126,14 +139,14 @@ class RoadGraph:
                 if nc < dist.get(m, 1e18):
                     dist[m], prev[m] = nc, (n, sid, fwd)
                     heapq.heappush(heap, (nc, m))
-        if goal not in prev:
+        if hit is None:
             return None
-        path, n = [], goal
+        path, n = [], hit
         while n != start:
             p, sid, fwd = prev[n]
             path.append((sid, fwd))
             n = p
-        return path[::-1]
+        return hit, path[::-1]
 
     def diversion(self, lat, lon, hdg):
         """A suggested diversion, or None: {"path", "km", "extra_min", "via", "lines"}."""
@@ -142,14 +155,16 @@ class RoadGraph:
             return None
         sid, fwd = hit
         for step in SEARCH_STEPS_M:
-            u, up_m, up_path = self._walk(sid, fwd, step, back=True)
-            v, down_m, down_path = self._walk(sid, fwd, step, back=False)
-            path = self.route(u, v, banned={sid})
-            if path:
+            u, up_m, up_path, _ = self._walk(sid, fwd, step, back=True)
+            _, _, _, ahead = self._walk(sid, fwd, step, back=False)
+            found = self.route(u, [n for n, _, _ in ahead], banned={sid})
+            if found:
+                goal, path = found
+                down_path = next(p for n, _, p in ahead if n == goal)
                 break
         else:
             return None
-        normal = up_path + [(sid, fwd)] + down_path
+        normal = up_path[::-1] + [(sid, fwd)] + down_path
         secs = sum(self.seg[s]["secs"] for s, _ in path)
         normal_secs = sum(self.seg[s]["secs"] for s, _ in normal)
         length = sum(self.seg[s]["len"] for s, _ in path)
