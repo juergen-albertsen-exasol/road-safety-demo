@@ -442,47 +442,42 @@ def rule_text(h):
 
 # Fixed trace slots, always in this order (empty when a layer is off or has no data), so that a refresh can
 # send only the slots that change: the traffic volume roads are by far the biggest and change once an hour.
-SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "diversions", "warned", "sim_outline", "simulation",
-         "sensors", "sensor_alarm", "signs", "singles"] + \
+SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "diversions", "warned", "simulation", "sensors",
+         "sensor_alarm", "signs", "singles"] + \
         [f"prov:{p}" for p in PROVIDER_COLOR] + [f"inc:{c}" for c in CATEGORY]
 VOLUME_SLOTS = {"vol:quiet", "vol:busy", "vol:heavy"}
 SLOTS_KEY = ",".join(SLOTS)    # a page loaded with another order of slots gets the full map, never a patch
 
 
 def simulation(d, layers):
-    """The running triggered events: an outline per area and a SIMULATION label (two traces). Drawn as ordinary
-    traces, not as map style layers: re-applying style layers on every refresh fails in the browser ("Map error")
-    and stops the whole map from redrawing."""
-    o_lat, o_lon, o_hover, lat, lon, text, hover = [], [], [], [], [], [], []
+    """The running triggered events: a dashed outline per area (map layers) and a SIMULATION label (a trace)."""
+    feats, lat, lon, text, hover = [], [], [], [], []
     for sc in (d["scenarios"] if "simulation" in layers else []):
         rings = wkt_coords(sc["area_wkt"])
         if not rings:
             continue
-        what = SCENARIO_LABEL.get(sc["scenario_type"], sc["scenario_type"])
-        label = (f"<b>Simulation: {what}</b>, triggered {hms(sc['started_at'])}<br>Started on purpose by the "
-                 "presenter. The partners report it with a delay; whether it becomes an incident is up to "
-                 "the combination, which never reads this.")
-        for ring in rings:
-            o_lon += [p[0] for p in ring] + [None]
-            o_lat += [p[1] for p in ring] + [None]
-            o_hover += [label] * len(ring) + [None]
+        feats.append({"type": "Feature", "properties": {},
+                      "geometry": {"type": "MultiLineString", "coordinates": [[list(p) for p in r] for r in rings]}})
         pts = rings[0]
+        what = SCENARIO_LABEL.get(sc["scenario_type"], sc["scenario_type"])
         lat.append(max(p[1] for p in pts))
         lon.append(sum(p[0] for p in pts) / len(pts))
         text.append(f"SIMULATION: {what}")
-        hover.append(label)
-    outline = go.Scattermap(lat=o_lat, lon=o_lon, mode="lines", name="Triggered area (simulation)",
-                            line=dict(width=2, color=SIM_COLOR), opacity=0.8, text=o_hover, hoverinfo="text")
+        hover.append(f"<b>Simulation: {what}</b>, triggered {hms(sc['started_at'])}<br>Started on purpose by the "
+                     "presenter. The partners report it with a delay; whether it becomes an incident is up to "
+                     "the combination, which never reads this.")
+    layers_out = [{"sourcetype": "geojson", "source": {"type": "FeatureCollection", "features": feats}, "type": "line",
+                   "color": SIM_COLOR, "line": {"width": 2, "dash": [3, 2]}, "below": "traces"}] if feats else []
     trace = go.Scattermap(lat=lat, lon=lon, mode="text", text=text, textposition="top center",
                           textfont=dict(color=SIM_COLOR, size=12), name="Triggered events (simulation)",
                           hovertext=hover, hoverinfo="text")
-    return trace, outline
+    return trace, layers_out
 
 
 def map_traces(d, layers, members):
     geom = d["geom"]
     tr = {}
-    tr["simulation"], tr["sim_outline"] = simulation(d, layers)
+    tr["simulation"], tr["_map_layers"] = simulation(d, layers)
     by_class = {k: [] for k in VOLUME}
     if "volume" in layers:
         for r in d["volume"]:
@@ -582,7 +577,7 @@ def map_traces(d, layers, members):
 def map_figure(traces):
     fig = go.Figure([traces[k] for k in SLOTS])
     fig.update_layout(map=dict(style="carto-positron", center=dict(lat=VIEW0["lat"], lon=VIEW0["lon"]), zoom=VIEW0["zoom"],
-                               ),
+                               layers=traces["_map_layers"]),
                       margin=dict(l=0, r=0, t=0, b=0), height=680, uirevision="keep", showlegend=False,
                       paper_bgcolor="#ffffff")
     return fig
@@ -593,6 +588,7 @@ def map_patch(traces):
     for i, k in enumerate(SLOTS):
         if k not in VOLUME_SLOTS:
             p["data"][i] = traces[k].to_plotly_json()
+    p["layout"]["map"]["layers"] = traces["_map_layers"]
     return p
 
 
@@ -653,7 +649,7 @@ def create_dash_app(server, url_base_pathname, metadata):
                     PROVIDER_LABEL[p]]) for p in PROVIDER_COLOR if p != "ROAD_OP"]
         + [html.Span([html.I(style={"background": SINGLE_COLOR, "borderRadius": "50%", "height": "9px", "width": "9px"}),
                       "single report, not confirmed"]),
-           html.Span([html.I(style={"background": "transparent", "borderTop": f"2px solid {SIM_COLOR}", "height": "0"}),
+           html.Span([html.I(style={"background": "transparent", "borderTop": f"2px dashed {SIM_COLOR}", "height": "0"}),
                       "triggered on purpose (simulation)"]),
            *[html.Span([html.I(style={"background": c, "borderRadius": "50%"}), lbl.lower()]) for lbl, c in SENSOR_KIND.values()],
            *[html.Span([html.I(style={"background": v[1]}), f"traffic: {v[3]}"]) for v in VOLUME.values()],
