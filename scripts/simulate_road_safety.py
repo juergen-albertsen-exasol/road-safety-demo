@@ -18,13 +18,16 @@ ROAD_SAFETY.INBOUND_MESSAGES; combining the events into confirmed warnings is up
 
 `run` options: --speed (simulation seconds per wall second, default 1), --seed, --weather-day
 (default 2026-10-27), --start (local time, default 06:00), --tick (wall seconds per batch, default 1),
---false-alarms (single unconfirmed reports per simulation hour, default 20), --transport kafka|direct
+--false-alarms (single unconfirmed reports per simulation hour, default 360: one every 10 s), --transport kafka|direct
 (direct writes the same messages into INBOUND_MESSAGES, without Kafka and the loader). --log prints
 every message sent: red = caused by a triggered scenario, yellow = a single false alarm that should
 never be confirmed, grey = routine sensor readings (--log events prints them in one short line per second).
 
-Background false alarms: now and then one provider reports a hazard where nothing happened (one car's
-ESC on a sharp bend). Nobody else reports it, so it must never become an incident.
+Background false alarms: one provider reports a hazard where nothing happened (one car's ESC on a sharp
+bend). Nobody else reports it, so it must never become an incident. The default is one every 10 seconds,
+far more than in reality, so there is always something to see. At that rate, two of them would often land
+close together by chance and be confirmed (as two independent sources should be), so the simulator keeps
+each false alarm out of the grouping radius of the active false alarms and triggered hazards of its category.
 
 Scenarios are injected on purpose and visibly, while `run` is running:
 
@@ -106,6 +109,10 @@ SENSOR_EVERY_S = 60
 FALSE_ALARM_CATEGORIES = {"temporary_slippery_road": 0.4, "obstacle_on_road": 0.35, "wrong_way_driver": 0.1,
                           "reduced_visibility": 0.1, "unprotected_accident_area": 0.05}
 FALSE_ALARM_VALID_MIN = 10
+# The grouping radius of each category in roadsafety/combine.sql: a false alarm keeps this far (plus a margin)
+# from every active false alarm and triggered hazard of the same category, so none is confirmed by chance.
+FALSE_ALARM_SPACING_M = {"temporary_slippery_road": 300, "obstacle_on_road": 150, "unprotected_accident_area": 250,
+                         "wrong_way_driver": 2500, "reduced_visibility": 5000, "exceptional_weather": 6000}
 
 
 # --------------------------------------------------------------------------- database
@@ -588,7 +595,9 @@ class Sim:
                 del self.reports[sid]
         rate = self.args.false_alarms * dt / 3600
         while self.rng.random() < rate:                      # Poisson-ish: usually 0, rarely more per tick
-            out.append(self.false_alarm(w))
+            fa = self.false_alarm(w)
+            if fa is not None:
+                out.append(fa)
             rate -= 1
         return out
 
@@ -600,14 +609,40 @@ class Sim:
                             observations=rep.observations, run_id=self.run_id, sensor_id=rep.sensor_id)
         return ev.TOPICS[rep.provider], msg, "scenario"
 
-    def false_alarm(self, w: dict) -> tuple[str, dict, str]:
+    def taken(self, cat: str, lon: float, lat: float) -> bool:
+        """Whether a false alarm here would group with an active false alarm or a triggered hazard of its category."""
+        r = FALSE_ALARM_SPACING_M.get(cat, 300) * 1.2
+        self.fa_active = [a for a in getattr(self, "fa_active", []) if a[0] > self.t]
+        spots = [(a[2], a[3]) for a in self.fa_active if a[1] == cat]
+        spots += [(rep.lon, rep.lat) for reps in self.reports.values() for rep in reps.values()
+                  if rep.category == cat and not rep.done and rep.version]
+        for run_ in self.running.values():                    # a triggered hazard: its whole area
+            if ev.SCENARIO_EVENTS[run_.kind]["category"] != cat:
+                continue
+            area = run_.area
+            spots += [self.graph[sg].mid for sg in (getattr(area, "segs", None) or ()) if sg in self.graph]
+            for pt in (getattr(area, "point", None), getattr(run_, "ww_now", None)):
+                if pt:
+                    spots.append((pt[0], pt[1]))
+            if getattr(area, "polygon", None) is not None:
+                ctr = area.polygon.centroid
+                spots.append((ctr.x, ctr.y))
+        return any(math.hypot((x - lon) * 74320, (y - lat) * 110540) <= r for x, y in spots)
+
+    def false_alarm(self, w: dict) -> tuple[str, dict, str] | None:
         cats, wts = zip(*FALSE_ALARM_CATEGORIES.items())
-        cat = self.rng.choices(cats, wts)[0]
+        for _ in range(30):                                  # a free spot: not grouped with anything active
+            cat = self.rng.choices(cats, wts)[0]
+            seg = self.segs[self.rng.choices(self.bg_segs, self.bg_weights)[0]]
+            fwd = seg.oneway == 1 or (seg.oneway == 0 and self.rng.random() < 0.5)
+            lon, lat, hdg = point_at(seg, fwd, self.rng.uniform(0, seg.length))
+            if not self.taken(cat, lon, lat):
+                break
+        else:
+            return None                                      # all tried spots taken: skip this one
         able = [p for p in FLEET if cat in ev.CAPABILITIES[p]]
         provider = self.rng.choices(able, [FLEET[p] for p in able])[0]
-        seg = self.segs[self.rng.choices(self.bg_segs, self.bg_weights)[0]]
-        fwd = seg.oneway == 1 or (seg.oneway == 0 and self.rng.random() < 0.5)
-        lon, lat, hdg = point_at(seg, fwd, self.rng.uniform(0, seg.length))
+        self.fa_active.append((self.t + FALSE_ALARM_VALID_MIN * 60, cat, lon, lat))
         cause = None
         if cat == "temporary_slippery_road" and provider in ev.KNOWS_CAUSE:
             cause = "ice" if (w["air_temp_c"] if w["air_temp_c"] is not None else 5) <= 1 else None
@@ -1110,7 +1145,8 @@ def main() -> int:
     p.add_argument("--start", default="06:00", help="local start time of the simulation")
     p.add_argument("--tick", type=float, default=1.0, help="wall seconds per batch")
     p.add_argument("--duration", type=float, default=0, help="stop after this many simulation seconds")
-    p.add_argument("--false-alarms", type=float, default=20.0, help="single unconfirmed reports per simulation hour")
+    p.add_argument("--false-alarms", type=float, default=360.0,
+                   help="single unconfirmed reports per simulation hour (default 360: one every 10 s, a demo rate)")
     p.add_argument("--transport", choices=["kafka", "direct"], default="kafka",
                    help="kafka (default): one topic per provider; direct: straight into INBOUND_MESSAGES")
     p.add_argument("--verbose", action="store_true")

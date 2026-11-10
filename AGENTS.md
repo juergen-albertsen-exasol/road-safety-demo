@@ -68,7 +68,7 @@ The simulator plays the partners: six carmakers and a navigation service send SR
 
 **Rehearsal reset:** after a rehearsal, delete the v1 app (`app_delete` for `munich-road-events`, after the presenter confirms) so it can be built again live, and run `simulate_road_safety.py stop-all`. A new `run` closes everything else.
 
-**False alarms are part of the show:** about 20 per simulated hour, one provider reports a hazard where nothing happened. They must never be confirmed. If one is, the rules are too loose.
+**False alarms are part of the show:** one every 10 simulated seconds by default (`--false-alarms 360` per hour, a demo rate, far higher than in reality), one provider reports a hazard where nothing happened. They must never be confirmed. At this rate two would often land close together by chance, so the simulator keeps each one out of the grouping radius of the active false alarms and triggered hazards of its category (`FALSE_ALARM_SPACING_M`, the radii of `roadsafety/combine.sql`; change both together). If one is confirmed anyway, check that spacing first.
 
 **Runs don't resume.** Every `run` starts a new run (new `run_id`) at its `--start` time and first closes every event that is still open in `SCENARIO_LOG` (it sets `ended_at` to the start time). So:
 - After the simulator has stopped, there is nothing to clean up: an event without `ended_at` from an earlier run is not active, and it won't come back. Don't tell the user it will.

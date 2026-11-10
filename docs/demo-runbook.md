@@ -63,6 +63,7 @@ T2:
 - 7:30 on a Tuesday in October; real weather of that day
 - Grey lines: the road operator's 158 sensors, each once a minute: a steady stream
 - Yellow: false alarms, one carmaker alone
+- One every 10 s: a demo rate, far higher than in reality
 - No hazard yet: those I trigger
 
 ### 3. Kafka: a tour of Kafbat UI
@@ -136,7 +137,7 @@ The agent creates `munich-road-events` on Dash Server (about a minute) and expla
 - Dash Server validates, builds, tests the SQL, serves it
 - Read-only database user, no password in the app
 - Refreshes every 2 s; *SQL executed* at the bottom
-- Few dots yet: only false alarms
+- The dots so far: false alarms, single carmakers
 
 ### 7. Dashboard v2, prepared
 
