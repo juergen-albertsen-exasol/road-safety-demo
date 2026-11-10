@@ -21,7 +21,7 @@ ROAD_SAFETY.INBOUND_MESSAGES; combining the events into confirmed warnings is up
 --false-alarms (single unconfirmed reports per simulation hour, default 20), --transport kafka|direct
 (direct writes the same messages into INBOUND_MESSAGES, without Kafka and the loader). --log prints
 every message sent: red = caused by a triggered scenario, yellow = a single false alarm that should
-never be confirmed, grey = routine sensor readings (--log events sums them up in one line per minute).
+never be confirmed, grey = routine sensor readings (--log events prints them in one short line per second).
 
 Background false alarms: now and then one provider reports a hazard where nothing happened (one car's
 ESC on a sharp bend). Nobody else reports it, so it must never become an incident.
@@ -627,10 +627,14 @@ class Sim:
     def due_sensors(self, t_from: float, t_to: float) -> list[dict]:
         """The sensors whose reading falls into (t_from, t_to]. Each sensor reports once per SENSOR_EVERY_S at its
         own second, spread evenly over the minute: a steady stream, as from real, unsynchronised sensors."""
-        n = len(self.sensors) or 1
+        if getattr(self, "_phase", None) is None or len(self._phase) != len(self.sensors):
+            order = list(range(len(self.sensors)))
+            random.Random(7).shuffle(order)           # mixed kinds every second, the same order in every run
+            n = len(order) or 1
+            self._phase = {i: k * SENSOR_EVERY_S / n for k, i in enumerate(order)}
         out = []
         for i, s in enumerate(self.sensors):
-            phase = i * SENSOR_EVERY_S / n
+            phase = self._phase[i]
             if (t_to - phase) // SENSOR_EVERY_S > (t_from - phase) // SENSOR_EVERY_S:
                 out.append(s)
         return out
@@ -691,8 +695,6 @@ class MessageLog:
         self.sim, self.mode = sim, mode
         self.color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
         self.names = {s["sensor_id"]: s.get("sensor_name", "") for s in sim.sensors}
-        self.round: dict[str, int] = {}             # readings of the current minute, per sensor type
-        self.round_alerts = 0
 
     def c(self, code, text):
         return f"{code}{text}{self.RESET}" if self.color else text
@@ -700,7 +702,7 @@ class MessageLog:
     def legend(self):
         print(self.c(self.BOLD, "Message log: ") + self.c(self.RED, "red = reports of a triggered scenario, ")
               + self.c(self.YELLOW, "yellow = a single false alarm (must not be confirmed), ")
-              + self.c(self.GREY, "grey = routine sensor readings" + (" (one line per minute)" if self.mode == "events" else "")),
+              + self.c(self.GREY, "grey = routine sensor readings" + (" (one short line per second)" if self.mode == "events" else "")),
               flush=True)
 
     def events(self, msgs):
@@ -719,21 +721,36 @@ class MessageLog:
     SENSOR_LABEL = {"road_weather": "road weather", "camera": "cameras", "loop_detector": "loop detectors",
                     "warning_trailer": "trailers"}
 
+    @staticmethod
+    def alarms(r) -> list[str]:
+        alarm = []
+        f, s = r["friction"], r["surface_temp_c"]
+        if f is not None and f < 0.4 and s is not None and s <= 0:
+            alarm.append(f"LOW FRICTION {f:.2f} at {s:.1f}C")
+        if r["visibility_m"] is not None and r["visibility_m"] < 150:
+            alarm.append(f"VISIBILITY {r['visibility_m']:.0f} m")
+        if r["wrong_way_detected"]:
+            alarm.append("WRONG-WAY VEHICLE")
+        if r["stationary_vehicle"]:
+            alarm.append("STATIONARY VEHICLE")
+        if r["works_active"]:
+            alarm.append("ROAD WORKS SET UP")
+        return alarm
+
+    @staticmethod
+    def short(r) -> str:
+        """A reading in a few characters: road weather 6.1C/0.80, a camera or loop detector its vehicles."""
+        if r["surface_temp_c"] is not None:
+            return f"{r['sensor_id']} {r['surface_temp_c']:.1f}C/{r['friction']:.2f}"
+        if r["sensor_type"] == "warning_trailer":
+            return f"{r['sensor_id']} works"
+        return f"{r['sensor_id']} {r['vehicle_count'] or 0} veh" + (f" {r['avg_speed_kmh']:.0f} km/h" if r["avg_speed_kmh"] and r["vehicle_count"] else "")
+
     def readings(self, rows):
         lines, alerts = [], 0
         for r in rows:
-            alarm = []
+            alarm = self.alarms(r)
             f, s = r["friction"], r["surface_temp_c"]
-            if f is not None and f < 0.4 and s is not None and s <= 0:
-                alarm.append(f"LOW FRICTION {f:.2f} at {s:.1f}C")
-            if r["visibility_m"] is not None and r["visibility_m"] < 150:
-                alarm.append(f"VISIBILITY {r['visibility_m']:.0f} m")
-            if r["wrong_way_detected"]:
-                alarm.append("WRONG-WAY VEHICLE")
-            if r["stationary_vehicle"]:
-                alarm.append("STATIONARY VEHICLE")
-            if r["works_active"]:
-                alarm.append("ROAD WORKS SET UP")
             alerts += bool(alarm)
             if self.mode == "events" and not alarm:
                 continue
@@ -743,17 +760,12 @@ class MessageLog:
             line = (f"{r['ts']:%H:%M:%S} ROAD_OP SENSOR {r['sensor_id']:<7} {str(self.names.get(r['sensor_id'], ''))[:40]:<40} "
                     f"{vals}" + ("  " + ", ".join(alarm) if alarm else ""))
             lines.append(self.c(self.RED + self.BOLD if alarm else self.GREY, line))
-        if rows and self.mode == "events":          # the routine readings: one line per full round (a minute)
-            for r in rows:
-                self.round[r["sensor_type"]] = self.round.get(r["sensor_type"], 0) + 1
-            self.round_alerts += alerts
-            n = sum(self.round.values())
-            if n >= len(self.sim.sensors):
-                per = ", ".join(f"{k} {self.SENSOR_LABEL.get(t, t)}" for t, k in sorted(self.round.items(), key=lambda x: -x[1]))
-                a = self.round_alerts
-                lines.append(self.c(self.GREY, f"{rows[-1]['ts']:%H:%M:%S} ROAD_OP SENSORS {n} readings in the last minute "
-                                               f"({per}), {a or 'no'} alert{'' if a == 1 else 's'}  -> {ev.TOPICS['ROAD_OP']}"))
-                self.round, self.round_alerts = {}, 0
+        if self.mode == "events":                   # the routine readings of this tick in one short line
+            quiet = [r for r in rows if not self.alarms(r)]
+            if quiet:
+                lines.insert(0, self.c(self.GREY, f"{quiet[0]['ts']:%H:%M:%S} ROAD_OP SENSORS "
+                                                  + " · ".join(self.short(r) for r in quiet)
+                                                  + f"  -> {ev.TOPICS['ROAD_OP']}"))
         if lines:
             print("\n".join(lines), flush=True)
 

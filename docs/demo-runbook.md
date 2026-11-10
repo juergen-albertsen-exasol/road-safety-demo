@@ -32,7 +32,7 @@ Database stopped: `exasol start` (about 20 s, starts the sidecars and the servic
 | Window | What |
 |---|---|
 | T1 | Terminal for your commands: sidecar status, the SQL prompt (`exasol connect`) |
-| T2 | The simulation (`--log events`): every message the partners send, one grey line per minute for the road operator's sensors, the incident banners |
+| T2 | The simulation (`--log events`): every message the partners send, a short grey line per second for the road operator's sensors, the incident banners |
 | Agent | Claude Code (or your agent) in the repo folder |
 | Browser | Kafbat UI <http://127.0.0.1:18080>; dashboard v2 <http://127.0.0.1:5100/apps/munich-road-conditions> (layers: all on except roadworks and accident history); v1 opens in step 6 |
 
@@ -61,7 +61,7 @@ T2:
 ```
 
 - 7:30 on a Tuesday in October; real weather of that day
-- Grey line: the road operator, 158 sensors, every minute
+- Grey lines: the road operator's 158 sensors, each once a minute: a steady stream
 - Yellow: false alarms, one carmaker alone
 - No hazard yet: those I trigger
 
