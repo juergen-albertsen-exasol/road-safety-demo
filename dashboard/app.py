@@ -450,28 +450,27 @@ SLOTS_KEY = ",".join(SLOTS)    # a page loaded with another order of slots gets 
 
 
 def simulation(d, layers):
-    """The running triggered events: a dashed outline per area (map layers) and a SIMULATION label (a trace)."""
-    feats, lat, lon, text, hover = [], [], [], [], []
+    """The running triggered events: a translucent circle and a SIMULATION label at each area. Not as an outline in
+    the map's style layers: changing those after the first drawing fails in the browser ("Map error.") and stops
+    the whole map from redrawing. The style layers stay empty."""
+    lat, lon, text, hover = [], [], [], []
     for sc in (d["scenarios"] if "simulation" in layers else []):
         rings = wkt_coords(sc["area_wkt"])
         if not rings:
             continue
-        feats.append({"type": "Feature", "properties": {},
-                      "geometry": {"type": "MultiLineString", "coordinates": [[list(p) for p in r] for r in rings]}})
         pts = rings[0]
         what = SCENARIO_LABEL.get(sc["scenario_type"], sc["scenario_type"])
-        lat.append(max(p[1] for p in pts))
+        lat.append(sum(p[1] for p in pts) / len(pts))
         lon.append(sum(p[0] for p in pts) / len(pts))
         text.append(f"SIMULATION: {what}")
         hover.append(f"<b>Simulation: {what}</b>, triggered {hms(sc['started_at'])}<br>Started on purpose by the "
                      "presenter. The partners report it with a delay; whether it becomes an incident is up to "
                      "the combination, which never reads this.")
-    layers_out = [{"sourcetype": "geojson", "source": {"type": "FeatureCollection", "features": feats}, "type": "line",
-                   "color": SIM_COLOR, "line": {"width": 2, "dash": [3, 2]}, "below": "traces"}] if feats else []
-    trace = go.Scattermap(lat=lat, lon=lon, mode="text", text=text, textposition="top center",
+    trace = go.Scattermap(lat=lat, lon=lon, mode="markers+text", text=text, textposition="top center",
+                          marker=dict(size=46, color=SIM_COLOR, opacity=0.18),
                           textfont=dict(color=SIM_COLOR, size=12), name="Triggered events (simulation)",
                           hovertext=hover, hoverinfo="text")
-    return trace, layers_out
+    return trace, []
 
 
 def map_traces(d, layers, members):
@@ -588,7 +587,7 @@ def map_patch(traces):
     for i, k in enumerate(SLOTS):
         if k not in VOLUME_SLOTS:
             p["data"][i] = traces[k].to_plotly_json()
-    p["layout"]["map"]["layers"] = traces["_map_layers"]
+    # Never the map's style layers: changing them fails in the browser ("Map error.") and stops the redraw.
     return p
 
 
@@ -649,7 +648,7 @@ def create_dash_app(server, url_base_pathname, metadata):
                     PROVIDER_LABEL[p]]) for p in PROVIDER_COLOR if p != "ROAD_OP"]
         + [html.Span([html.I(style={"background": SINGLE_COLOR, "borderRadius": "50%", "height": "9px", "width": "9px"}),
                       "single report, not confirmed"]),
-           html.Span([html.I(style={"background": "transparent", "borderTop": f"2px dashed {SIM_COLOR}", "height": "0"}),
+           html.Span([html.I(style={"background": SIM_COLOR, "opacity": "0.3", "borderRadius": "50%", "height": "12px", "width": "12px"}),
                       "triggered on purpose (simulation)"]),
            *[html.Span([html.I(style={"background": c, "borderRadius": "50%"}), lbl.lower()]) for lbl, c in SENSOR_KIND.values()],
            *[html.Span([html.I(style={"background": v[1]}), f"traffic: {v[3]}"]) for v in VOLUME.values()],
