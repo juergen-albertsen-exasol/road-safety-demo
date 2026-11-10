@@ -408,7 +408,7 @@ class Sim:
         h, m = map(int, args.start.split(":"))
         self.t0 = day.replace(hour=h, minute=m)
         self.t = 0.0                    # simulation seconds since t0
-        self.next_sensor = 0.0
+        self.sensor_t = -1e-9          # readings are due up to this simulation time
         self.run_id = int(c.execute('SELECT COALESCE(MAX("run_id"), 0) + 1 FROM ROAD_SAFETY.SIM_STATE').fetchval())
         self.running: dict[int, rs.Running] = {}
         self.steering: dict[int, dict] = {}
@@ -624,11 +624,22 @@ class Sim:
             self.traffic.update(self.now, self.t - self.traffic_t, caps)
             self.traffic_t = self.t
 
-    def readings(self, w: dict) -> list[dict]:
+    def due_sensors(self, t_from: float, t_to: float) -> list[dict]:
+        """The sensors whose reading falls into (t_from, t_to]. Each sensor reports once per SENSOR_EVERY_S at its
+        own second, spread evenly over the minute: a steady stream, as from real, unsynchronised sensors."""
+        n = len(self.sensors) or 1
+        out = []
+        for i, s in enumerate(self.sensors):
+            phase = i * SENSOR_EVERY_S / n
+            if (t_to - phase) // SENSOR_EVERY_S > (t_from - phase) // SENSOR_EVERY_S:
+                out.append(s)
+        return out
+
+    def readings(self, w: dict, sensors: list[dict] | None = None) -> list[dict]:
         rows = []
         wet = w["precip_last_hour_mm"] > 0
         wrong_way = [r for r in self.running.values() if r.kind == "wrong_way_driver"]
-        for s in self.sensors:
+        for s in (self.sensors if sensors is None else sensors):
             sid = int(s["segment_id"])
             fx = self.seg_fx.get(sid, {})
             r = {"ts": self.now, "sensor_id": s["sensor_id"], "sensor_type": s["sensor_type"], "surface_temp_c": None,
@@ -680,6 +691,8 @@ class MessageLog:
         self.sim, self.mode = sim, mode
         self.color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
         self.names = {s["sensor_id"]: s.get("sensor_name", "") for s in sim.sensors}
+        self.round: dict[str, int] = {}             # readings of the current minute, per sensor type
+        self.round_alerts = 0
 
     def c(self, code, text):
         return f"{code}{text}{self.RESET}" if self.color else text
@@ -730,13 +743,17 @@ class MessageLog:
             line = (f"{r['ts']:%H:%M:%S} ROAD_OP SENSOR {r['sensor_id']:<7} {str(self.names.get(r['sensor_id'], ''))[:40]:<40} "
                     f"{vals}" + ("  " + ", ".join(alarm) if alarm else ""))
             lines.append(self.c(self.RED + self.BOLD if alarm else self.GREY, line))
-        if rows and self.mode == "events":          # the routine readings in one line, so the road operator shows
-            kinds: dict[str, int] = {}
+        if rows and self.mode == "events":          # the routine readings: one line per full round (a minute)
             for r in rows:
-                kinds[r["sensor_type"]] = kinds.get(r["sensor_type"], 0) + 1
-            per = ", ".join(f"{n} {self.SENSOR_LABEL.get(k, k)}" for k, n in sorted(kinds.items(), key=lambda x: -x[1]))
-            lines.insert(0, self.c(self.GREY, f"{rows[0]['ts']:%H:%M:%S} ROAD_OP SENSORS {len(rows)} readings ({per}), "
-                                              f"{alerts or 'no'} alert{'' if alerts == 1 else 's'}  -> {ev.TOPICS['ROAD_OP']}"))
+                self.round[r["sensor_type"]] = self.round.get(r["sensor_type"], 0) + 1
+            self.round_alerts += alerts
+            n = sum(self.round.values())
+            if n >= len(self.sim.sensors):
+                per = ", ".join(f"{k} {self.SENSOR_LABEL.get(t, t)}" for t, k in sorted(self.round.items(), key=lambda x: -x[1]))
+                a = self.round_alerts
+                lines.append(self.c(self.GREY, f"{rows[-1]['ts']:%H:%M:%S} ROAD_OP SENSORS {n} readings in the last minute "
+                                               f"({per}), {a or 'no'} alert{'' if a == 1 else 's'}  -> {ev.TOPICS['ROAD_OP']}"))
+                self.round, self.round_alerts = {}, 0
         if lines:
             print("\n".join(lines), flush=True)
 
@@ -823,13 +840,12 @@ def run(args) -> None:
             for topic, m, origin in msgs:
                 sim.pub.send(topic, m["event_id"], m)
                 counts[origin] += 1
-            readings = []
-            if sim.t >= sim.next_sensor:
-                readings = sim.readings(w)
-                sim.next_sensor += SENSOR_EVERY_S
-                for r in readings:
-                    sim.pub.send(ev.TOPICS["ROAD_OP"], r["sensor_id"], ev.sensor_reading(r, sim.run_id))
-                counts["sensor"] += len(readings)
+            due = sim.due_sensors(sim.sensor_t, sim.t)
+            sim.sensor_t = sim.t
+            readings = sim.readings(w, due) if due else []
+            for r in readings:
+                sim.pub.send(ev.TOPICS["ROAD_OP"], r["sensor_id"], ev.sensor_reading(r, sim.run_id))
+            counts["sensor"] += len(readings)
             sim.pub.flush()
             sim.state("running")
             if log:
