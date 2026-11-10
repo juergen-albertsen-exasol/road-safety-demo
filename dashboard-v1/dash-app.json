@@ -1,0 +1,14 @@
+{
+  "name": "munich-road-events",
+  "title": "Munich Road Events",
+  "route": "/apps/munich-road-events",
+  "description": "v1: the SRTI events the (simulated) carmakers, the navigation service and the road operator send, live from Exasol.",
+  "template": "exasol-analytics",
+  "data_sources": {
+    "primary": {
+      "kind": "exasol",
+      "profile": "road-safety-demo",
+      "auth_mode": "local_direct"
+    }
+  }
+}

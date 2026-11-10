@@ -1,8 +1,17 @@
 # Demo runbook: Data for Road Safety, sovereign and free
 
-A step-by-step demo of about 20 minutes, with the commands to type and what to say. The slides are the deck *Data for Road Safety in Munich*; the architecture behind it is in [architecture.md](architecture.md).
+A demo of about 20 minutes: five slides first, then everything live in the terminal, the agent and the browser, without going back to the slides. The slides are the deck *Data for Road Safety in Munich*; the architecture behind it is in [architecture.md](architecture.md).
 
-Every command runs from the repo folder. Instead of typing a trigger you can also say it to your agent in plain words ("an oil spill on the A9 near Freimann, only OEM A sees it"); it runs the same command and shows the banner (see [AGENTS.md](../AGENTS.md#running-the-demo)).
+| Part | What | Where | Time |
+|---|---|---|---|
+| Slides 1–5 | Use case, technical setup, simulator, what you'll see | Deck | 6 min |
+| 1 | The node: the sidecars | Terminal | 1 min |
+| 2 | Start the simulation | Terminal | 1 min |
+| 3 | Dashboard v1, built live | Agent, browser | 3 min |
+| 4 | Dashboard v2, prepared | Browser | 2 min |
+| 5 | One carmaker: an oil spill | Agent, browser | 2 min |
+| 6 | Three carmakers: an accident | Agent, browser | 3 min |
+| 7 | Questions, clean up | Agent | 2 min |
 
 ## Before the talk (30 minutes ahead)
 
@@ -14,141 +23,144 @@ exasol sidecar status -d road-safety-demo         # kafka, kafka-ui, mcp, road-s
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:5100/apps/munich-road-conditions   # 200
 ```
 
-If the database is stopped: `exasol start -d road-safety-demo` (about 20 s, starts the sidecars too, the service among them). If Dash Server doesn't answer: `./demo dash` in a terminal of its own.
+If the database is stopped: `exasol start -d road-safety-demo` (about 20 s, starts the sidecars and the service too). If Dash Server doesn't answer: `./demo dash` in a terminal of its own.
 
-**2. Open four terminals** (large font, dark background):
+**2. Open the windows** (large font, dark background):
 
-| Terminal | Command | Keep it visible? |
+| Window | What | |
 |---|---|---|
-| T1 Service | `./demo sidecar logs -f` (the service runs as a sidecar) | Yes: one line per published warning |
-| T2 Partners | `./demo sim run --start 07:30 --log events` | Yes: every message the partners send, and the incident banners |
-| T3 Triggers | (your commands below) | Yes |
-| T4 SQL | (the queries in step 8) | Only for step 8 |
+| T1 | Terminal for your commands (sidecar status, starting the simulation) | Step 1, 2 |
+| T2 | The simulation runs here (`--log events`): every message the partners send, the incident banners | From step 2 on |
+| Agent | Claude Code (or your agent) in the repo folder | Step 3, 5, 6 |
+| Browser | The deck; dashboard v2 <http://127.0.0.1:5100/apps/munich-road-conditions> (layers: all on except roadworks and accident history); v1 opens in step 3 | |
 
-T1 only shows the service's output; the service itself runs with the database. A new simulator run closes everything left from rehearsals; the service clears their incidents.
+Optional: a third terminal with `./demo sidecar logs -f` (the service's line per published warning) and Kafbat UI <http://127.0.0.1:18080>.
 
-**3. Open three browser tabs:** the deck; the dashboard <http://127.0.0.1:5100/apps/munich-road-conditions> (layers: all on except roadworks and accident history; rule: 2 providers, sensor may replace one); Kafbat UI <http://127.0.0.1:18080> (Topics).
+**3. Rehearse once, then reset.** Run steps 2–6, then tell the agent *"reset the demo after the rehearsal"*: it deletes the v1 app (after you confirm) so it can be built live again, and withdraws the events (`./demo sim stop-all`). Stop the simulation in T2 (Ctrl-C). Starting it again on stage begins a clean run.
 
-**4. Rehearse once:** steps 3 and 4 below, then `./demo sim stop-all`. Then restart T2 (Ctrl-C, start again) for a clean run.
+## The slides (6 min)
 
-## The demo
+**Slide 1, cover.** "What a partner in Data for Road Safety would run: a service that takes safety events from several carmakers and the road operator, decides which it can trust, and passes the warnings on. On the partner's own machine, from free components."
 
-### Step 1: The use case (slides 1–4, 3 min)
+**Slide 2, use case.** "More than 8 million connected vehicles. Carmakers detect hazards in their own backends and share a finished event in one of eight categories, never raw data. The question: when is a report a warning you can trust? One carmaker is one source, however many of its cars saw it. Two different carmakers, or one plus the road operator's sensor, make it an incident."
 
-> "Data for Road Safety is a partnership of carmakers, map providers and road authorities in the Mobility Data Space: more than 8 million connected vehicles. Each carmaker detects hazards in its own backend and shares a finished event in one of eight categories. Never raw data."
->
-> "The question is: when is a report a warning you can trust? One carmaker reporting ice, even from 26 of its own cars, is one source. If its detection is off, all 26 are off the same way."
+**Slide 3, technical setup.** "Everything runs on this laptop. Exasol Personal is the database, and four sidecars start and stop with it: Kafka carries the messages, Kafbat UI shows them, the MCP server lets my agent ask SQL questions, read-only, and the road safety service loads, combines and publishes every one and a half seconds. Dash Server hosts the dashboards. Outside the box: the simulator, playing the other partners, and my agent, which is how I steer the demo."
 
-### Step 2: The partner's node (slides 5–6, 3 min)
+**Slide 4, simulator.** "Munich is real: roads, traffic per hour, weather, roadworks, accident history, all open data. The partners are simulated, because DFRS data isn't open. A hazard only exists when I trigger one, and the reports come after 5, 12 and 20 seconds: compressed, real backends take a minute or more."
 
-> "This is what a partner would run. Everything inside the dashed box runs on their own machine or cloud account: Kafka as the transport, Exasol as the system of record, a small service, a dashboard. All free components: Exasol Personal, Apache Kafka, open-source tools, open data."
+**Slide 5, what you'll see.** Read the six steps. "From here on, no more slides."
 
-Switch to the terminals and Kafbat UI:
+## Live
+
+### 1. The node (1 min)
+
+T1:
 
 ```bash
 exasol sidecar status -d road-safety-demo
 ```
 
-> "Kafka runs as a sidecar of the database, on this laptop, and so does our service: one `exasol start` brings up the whole node. Here are the topics: one per partner. And here (T2) are the messages the partners are sending right now: road sensor readings every minute, and now and then a single carmaker reporting something nobody else sees: a false alarm."
+> "This is the partner's node. The database, and four sidecars: Kafka, its UI, the MCP server for my agent, and our service. One `exasol start` brings up all of it. Nothing runs in a cloud."
 
-For a technical audience, slides 7–11 go deeper (real and synthetic, the partners, the sensors, the combination rule, the system of record); otherwise skip to the live demo and come back to slides 10–11 when the questions start.
+### 2. Start the simulation (1 min)
 
-### Step 3: The dashboard at rest (1 min)
-
-Dashboard tab. Point to: traffic volume per road (modelled from real counts), road sensors, grey dots.
-
-> "Grey dots are single reports: one provider, nobody else. They stay grey. They are never passed on."
-
-### Step 4: One source (2 min)
+T2:
 
 ```bash
-./demo sim trigger oil_spill --road A9 --near Freimann --direction south --providers OEM_A
+./demo sim run --start 07:30 --log events
 ```
 
-What happens: the banner in T3; on the map at once a dashed outline *SIMULATION: oil spill*; after about 5 s a red line in T2 (OEM A, NEW) and a grey dot on the A9.
+> "Now the other partners start sending: it's 7:30 on a Tuesday in October in Munich, with the real weather of that day. The road operator's sensors send a reading every minute, and now and then a single carmaker reports something nobody else sees: a false alarm. No hazard yet: I'll trigger those."
 
-> "This is a simulation: I just put oil on the A9, and only one carmaker sees it. Its report arrives through Kafka into Exasol within seconds. And it stays grey: one source isn't enough."
+### 3. Dashboard v1, built live (3 min)
 
-Optional: Kafbat UI → `srti.oem-a` → Messages: the JSON of the event (category, DATEX II type, position, validity, confidence, cause: fluid).
+Agent:
 
-### Step 5: A second source (2 min)
+> *Build a simple dashboard, v1, that shows the road events coming in live from the partners.*
 
-```bash
-./demo sim trigger oil_spill --providers OEM_A,OEM_D
-```
+The agent creates the app `munich-road-events` on Dash Server and explains while it deploys (about a minute). Open <http://127.0.0.1:5100/apps/munich-road-events>.
 
-What happens: after about 12 s OEM D's report (T2), one round later the incident: the red marker, the card on the right, the banner *INCIDENT CONFIRMED BY EXASOL* in T2, a line `NEW INC-…` in T1, and the warning in the ticker *Published to srti.confirmed*.
+> "Three SQL files and a page of Python. Dash Server validates it, builds it, tests the SQL against the database and serves it, with a read-only database user: no password in the app. Every two seconds the page asks Exasol what came in. Each dot is a report, in the colour of the carmaker that sent it." Open *SQL executed* at the bottom.
 
-> "A second carmaker, a different source, reports the same thing at the same place, in the same direction. Now Exasol confirms it: one SQL query, a fifth of a second. The card says why: two providers, cause fluid, and about how many vehicles pass this spot in the next ten minutes, from real traffic volumes. And the warning is already published back to Kafka, for everyone."
+There may be few dots yet: only false alarms, now and then. That's fine: the message list on the right fills with sensor readings within a minute.
 
-Optional: Kafbat UI → `srti.confirmed`: the outgoing warning, with the sources' attribution.
+### 4. Dashboard v2, prepared (2 min)
 
-### Step 6: A sensor as the second source (2 min)
+Switch to <http://127.0.0.1:5100/apps/munich-road-conditions>.
 
-```bash
-./demo sim trigger slippery_road --area reichenbachbruecke --providers OEM_B --sensor
-```
+> "This is version two. I built it beforehand, over several iterations, because it takes longer than a demo slot. Same Dash Server, same database, a lot more SQL: traffic volume per road, modelled from real counts, the road sensors, single reports in grey, confirmed incidents with the reports behind them, how many vehicles pass the spot, and every warning we publish. And the rule itself, as sliders."
 
-What happens: OEM B after 5 s, the road weather station on the Reichenbachbrücke after 8 s; confirmed as *1 provider and a road operator sensor*, cause ice.
+### 5. One carmaker: an oil spill (2 min)
 
-> "It doesn't always need two carmakers. Here one carmaker reports ice on the Reichenbachbrücke, and the road operator's weather station on the bridge measures a frozen surface. Two independent sources: confirmed."
+Agent:
 
-### Step 7: Change the rule (1 min)
+> *Simulate an oil spill on the A9 near Freimann, southbound. Only OEM A sees it.*
 
-On the dashboard, set *Different providers needed* to 3.
+The agent says it's a simulation and runs `trigger oil_spill --road A9 --near Freimann --direction south --providers OEM_A` (it takes 10 to 20 s to answer). Then, from the trigger:
 
-> "The rule is a parameter of the SQL. Require three providers, and the oil spill is no longer an incident: two aren't enough. This is a what-if on the page; the service keeps publishing with its own rule." (Set it back to 2. Open *SQL executed* at the bottom to show the query.)
+| After | What you see |
+|---|---|
+| at once | v2: a dashed outline *SIMULATION: oil spill* on the A9; T2: the banner |
+| about 10 s | OEM A's report: a grey dot in v2, a blue dot in v1, a red line in T2 |
 
-### Step 8: Sovereign: everything on record (2 min)
+> "OEM A reports oil on the A9. Its report comes through Kafka into Exasol within seconds. And it stays grey: one source is not enough. It's not passed on."
 
-T4:
+### 6. Three carmakers: an accident (3 min)
 
-```bash
-exapump sql -p road-safety-demo 'SELECT "sim_at", "status", "incident_id", "topic", "kafka_offset" FROM ROAD_SAFETY.OUTBOUND_MESSAGES ORDER BY "sent_wall" DESC LIMIT 5'
-exapump sql -p road-safety-demo 'SELECT i."incident_id", i."srti_category", i."rule", e."provider", e."report_id" FROM ROAD_SAFETY.INCIDENTS i JOIN ROAD_SAFETY.INCIDENT_EVIDENCE e ON e."incident_id" = i."incident_id" WHERE i."run_id" = (SELECT MAX("run_id") FROM ROAD_SAFETY.SIM_STATE) ORDER BY i."confirmed_at" DESC'
-```
+Agent:
 
-> "Kafka keeps nothing. Exasol keeps everything: what came in from whom, which reports confirmed which incident, and every warning that went out, with its Kafka offset. That's the audit trail a usage policy asks for, in the partner's own database, one query away. Nothing here left this laptop."
+> *Now an accident on Leopoldstraße near Münchner Freiheit. Three carmakers see it: OEM B, C and E.*
 
-Or ask the agent: *"Which warnings did we publish, and which reports confirmed them?"*
+The agent runs `trigger accident --road Leopoldstraße --near "Münchner Freiheit" --providers OEM_B,OEM_C,OEM_E`. From the trigger:
 
-### Step 9: A wrong-way driver (2 min, the showpiece)
+| After | What you see |
+|---|---|
+| about 9 s | OEM B's report (one dot, grey in v2) |
+| about 17 s | OEM C's report: **confirmed**. v2: the red marker, the incident card (2 providers, about 390 vehicles in the next 10 minutes), *Published to srti.confirmed* in the ticker; T2: *INCIDENT CONFIRMED BY EXASOL* |
+| about 24 s | OEM E's report: the card updates to 3 providers |
 
-```bash
-./demo sim trigger wrong_way_driver --road A9 --direction south --near Fröttmaning
-```
+> "Three carmakers, three independent sources. As soon as the second one is in, Exasol confirms it: one SQL query, a fifth of a second, and the warning goes back out through Kafka for everyone. The card says why: which carmakers, and how many vehicles pass this spot in the next ten minutes, from real traffic counts."
 
-What happens: two carmakers after 5 and 12 s, a wrong-way camera at a ramp when the driver passes it; the incident moves north along the A9 with each update, and clears after about 2 minutes when the driver has left the motorway.
+Then the rule, in v2: set *Different providers needed* to 3.
 
-> "Someone is driving north on the southbound A9. Two carmakers see it, a camera at the ramp sees it. The incident follows the driver, every update is published. When the driver is gone, the providers withdraw their events, and the clearing is published too."
+> "And if a partner wants to be stricter? The rule is a parameter of the SQL. Require three: the accident still holds, three carmakers saw it. The oil spill never had a chance." (Set it back to 2.)
 
-### Step 10: Clean up (30 s)
+### 7. Questions, clean up (2 min)
 
-```bash
-./demo sim stop-all
-```
+Questions go to the agent, which answers with SQL: *"Which warnings did we publish, and which reports confirmed them?"*
 
-> "The providers withdraw their reports; the incidents are cleared and the clearing is published."
+> "Kafka keeps nothing. Exasol keeps everything: what came in from whom, which reports confirmed which incident, every warning that went out. That's the audit trail, in the partner's own database."
 
-### Step 11: Close (slides 15–16, 2 min)
+Clean up when you're done: *"Stop all events."* (`./demo sim stop-all`): the carmakers withdraw their reports and the clearing is published too.
 
-> "Iteration one is what you saw: a laptop, the other partners simulated. Iteration two puts the partner's EDC connector in front of the same topics and runs in their own cloud account, a European one if they like. Same topics, same SQL. Trust comes from independent sources, the whole service runs on the partner's ground, and it starts free."
+## Timing
 
-## Optional extras
+Measured on the wall clock on 2026-11-10, the service as a sidecar, simulation speed 1 (`--start 07:30`, no `--speed`):
 
-| What | Command | Say |
-|---|---|---|
-| An accident that nobody secures | `./demo sim trigger accident --road Leopoldstraße --near "Münchner Freiheit"`, then `./demo sim speed 10` for a minute, back with `./demo sim speed 1` | "After ten minutes without a road operator response the accident area becomes an unmanaged blockage, the seventh category." |
-| Fog | `./demo sim trigger fog --near Aubing` | "Three carmakers with fog lights on and road weather stations measuring under 150 m visibility: an area warning." |
-| Realistic pace | add `--delay realistic` to a trigger | "In reality a backend takes longer to detect and share; the second report comes after a minute or so." |
-| Ask the audience | "Where should it happen?" Let the agent place it (`--dry-run` first if the place is vague). | |
+| Trigger | First report in Exasol | Confirmed and published | Last report |
+|---|---|---|---|
+| Oil spill, 1 OEM | 8.5 s | never (one source) | |
+| Accident, 3 OEMs | 7 s | 15 s | 22 s |
+
+The dashboard adds up to 2–3 s (it refreshes every 2 s). Add the agent's own 10 to 20 s for announcing and starting the trigger: enough time to say what's about to happen. The providers' pace is set in `scripts/srti_events.py` (`STAGE_DELAYS`: 5, 12, 20 s of simulated time). Don't run the simulation faster (`--speed`) on stage: the reports would arrive within a few seconds, which looks unrealistic.
 
 ## If something goes wrong
 
 | Symptom | Do |
 |---|---|
-| No new dots after a trigger | Does `exasol sidecar status -d road-safety-demo` show `road-safety-service` serving? Is T2 (simulator) running? The banner says when each provider reports. |
-| An incident doesn't confirm | Only one provider named? Add a second (`--providers A,B`) or `--sensor`. |
+| No new dots after a trigger | Is T2 (simulation) running? `exasol sidecar status -d road-safety-demo`: is `road-safety-service` serving? The banner says when each carmaker reports. |
+| The accident doesn't confirm | Check the banner: are two or more carmakers named? `./demo sidecar logs` shows what the service published. |
+| v1 can't be created: the app exists | Left from a rehearsal: let the agent replace it, or open it as it is. |
+| v1 shows an error | Reload. If it persists, the agent reads `app_tail_logs`. |
 | Dashboard frozen | Reload the page. The clock under the title says whether the simulation is stopped. |
-| Kafka trouble (no messages in Kafbat UI) | Fallback without Kafka: `./demo sidecar disable`, Ctrl-C T1 and T2, then `./demo service --transport direct` and `./demo sim run --start 07:30 --log events --transport direct`. Everything works, without the Kafka part of the story. |
-| Database stopped | `exasol start -d road-safety-demo`, then restart T1 and T2; the service comes back with the database. |
+| Kafka trouble (no messages arrive) | Fallback without Kafka: `./demo sidecar disable`, then in T1 `./demo service --transport direct` and in T2 `./demo sim run --start 07:30 --log events --transport direct`. Everything works, without the Kafka part of the story. Afterwards `./demo sidecar enable`. |
+| Database stopped | `exasol start -d road-safety-demo` (starts the service too), then restart T2. |
+
+## Optional extras
+
+| What | Say to the agent |
+|---|---|
+| A second source for the oil spill | *"Now OEM D sees the oil too."* (confirmed about 12 s later) |
+| The road operator as the second source | *"Ice on the Reichenbachbrücke, OEM B and the road weather station see it."* |
+| A wrong-way driver | *"A wrong-way driver on the A9 southbound near Fröttmaning."* (moves for about 2 minutes) |
+| Realistic pace | add *"as slowly as in reality"*: the second report after about a minute |

@@ -105,7 +105,8 @@ On stage you don't type these: you tell the agent what happens and where, and it
 |---|---|
 | `AGENTS.md` | Instructions for the agent: setup, demo rules, troubleshooting |
 | `demo` | Starts the scripts by a short name |
-| `dashboard/` | The Dash app `munich-road-conditions`: `app.py` and its SQL in `queries/` |
+| `dashboard/` | The Dash app `munich-road-conditions` (v2): `app.py` and its SQL in `queries/` |
+| `dashboard-v1/` | The simple live-events app `munich-road-events` (v1), which the agent builds live in the demo |
 | `roadsafety/` | SQL: `combine.sql` (the rule), `parse.sql`, the schemas, the Kafka connector scripts |
 | `service/` | `Containerfile`: the service's image for the sidecar |
 | `scripts/` | `road_safety_service.py` (the service), `service_sidecar.py` (builds and runs it as a sidecar), `db.py` (connections), `kafka_loader.py`, `setup_kafka.py`, `simulate_road_safety.py` (with `srti_events.py`, `road_scenarios.py`, `road_traffic.py`), `prepare_road_data.py`, `load_road_data.sh`, `setup_access.py`, `build_dashboard_queries.py`, `start_dash_server.sh` |
