@@ -106,7 +106,7 @@ On stage you don't type these: you tell the agent what happens and where, and it
 | `scripts/` | `road_safety_service.py` (the service), `kafka_loader.py`, `setup_kafka.py`, `simulate_road_safety.py` (with `srti_events.py`, `road_scenarios.py`, `road_traffic.py`), `prepare_road_data.py`, `load_road_data.sh`, `setup_access.py`, `build_dashboard_queries.py`, `start_dash_server.sh` |
 | `data/source/` | Small inputs kept in git: city districts, city roadworks, congestion hotspots |
 | `research/` | The open data sources with licenses and limits; the Munich congestion hotspots |
-| `docs/` | [architecture.md](docs/architecture.md): how it is built and why. [context.md](docs/context.md): the Mobility Data Space and DFRS. [plan.md](docs/plan.md): the design and how it evolved |
+| `docs/` | [architecture.md](docs/architecture.md): how it is built and why. [demo-runbook.md](docs/demo-runbook.md): the demo step by step, with commands and talk track. [context.md](docs/context.md): the Mobility Data Space and DFRS. [plan.md](docs/plan.md): the design and how it evolved |
 
 ## Data and licenses
 
