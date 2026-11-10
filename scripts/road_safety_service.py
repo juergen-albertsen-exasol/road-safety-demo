@@ -342,7 +342,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--deployment", default="road-safety-demo")
     p.add_argument("--transport", choices=["kafka", "direct"], default="kafka")
-    p.add_argument("--interval", type=float, default=3.0, help="seconds between rounds (default 3)")
+    p.add_argument("--interval", type=float, default=1.5, help="seconds between rounds (default 1.5)")
     p.add_argument("--min-providers", type=int, default=2, help="different providers needed (default 2)")
     p.add_argument("--once", action="store_true", help="one round, then exit")
     p.add_argument("--verbose", action="store_true", help="also print every Kafka import")

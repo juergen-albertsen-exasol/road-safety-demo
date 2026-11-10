@@ -30,8 +30,8 @@ CAVEAT = ("The carmakers, the navigation service and the road operator are simul
 ATTRIBUTION = ("Road network (c) OpenStreetMap contributors (ODbL). Traffic counts: Bundesanstalt fuer Strassenwesen "
                "(CC BY 4.0). Roadworks: City of Munich (dl-de/by-2.0), (c) Die Autobahn GmbH des Bundes. Accidents: "
                "Unfallatlas (dl-de/by-2.0). Weather: Deutscher Wetterdienst (CC BY 4.0).")
-REFRESH_MS = 5000
-FULL_EVERY = 12               # resend the traffic volume roads (the biggest layer) every 12th refresh = 60 s
+REFRESH_MS = 2000
+FULL_EVERY = 30               # resend the traffic volume roads (the biggest layer) every 30th refresh = 60 s
 VIEW0 = {"lat": 48.150, "lon": 11.590, "zoom": 10.0}
 DEFAULT_RULE = {"min_providers": 2, "sensor_replaces": 1}
 COMBINE = {"window_min": 30, "heading_max": 60, "friction_max": 0.4, "visibility_max": 150,
@@ -56,12 +56,16 @@ SINGLE_COLOR = "#9ca3af"
 VOLUME = {  # load class -> (lower bound of load, colour, width, label)
     "quiet": (0.0, "#d6dae0", 1.5, "quiet"), "busy": (0.55, "#f2c36b", 2.5, "busy"), "heavy": (0.85, "#e8915a", 3.5, "very busy"),
 }
-LAYERS = [("events", "Reports from providers"), ("incidents", "Confirmed incidents"), ("sensors", "Road sensors"),
+LAYERS = [("simulation", "Triggered events (simulation)"), ("events", "Reports from providers"),
+          ("incidents", "Confirmed incidents"), ("sensors", "Road sensors"),
           ("volume", "Traffic volume (modelled)"), ("roadworks", "Roadworks (long-term, real)"),
           ("accidents", "Accident history (2016-2025)")]
 SENSOR_KIND = {"road_weather": ("Road weather station", "#0d9488"), "camera": ("Camera", "#334155"),
                "loop_detector": ("Loop detector", "#64748b"), "warning_trailer": ("Road works warning trailer", "#b45309")}
 STATUS_COLOR = {"new": "#dc2626", "update": "#2563eb", "cleared": "#16a34a"}
+SIM_COLOR = "#475569"
+SCENARIO_LABEL = {"slippery_road": "ice", "oil_spill": "oil spill", "accident": "accident", "wrong_way_driver": "wrong-way driver",
+                  "fog": "fog", "storm": "storm", "animal": "animal on the road", "debris": "debris", "roadworks": "road works"}
 
 INDEX_STRING = """<!DOCTYPE html>
 <html><head>{%metas%}<title>{%title%}</title>{%favicon%}{%css%}
@@ -205,7 +209,7 @@ _STATIC = {}
 _VOLUME = {"hour": None, "rows": []}
 _CACHE = {"t": 0.0, "key": None, "data": None, "log": []}
 _LOCK = threading.Lock()
-CACHE_TTL_S = 4.0            # all open pages share one set of query results for this long
+CACHE_TTL_S = 1.5            # all open pages share one set of query results for this long
 
 
 def geometry(server, metadata, log):
@@ -253,6 +257,7 @@ def fetch(server, metadata, rule, layers):
             "kpis": run_sql(server, metadata, "kpis", {}, log),
             "sensors": run_sql(server, metadata, "sensor_latest", {}, log) if "sensors" in layers else [],
             "offers": run_sql(server, metadata, "offers", {}, log),
+            "scenarios": run_sql(server, metadata, "scenarios_active", {}, log),
             "volume": volume(server, metadata, now.hour, log),
             "static": static(server, metadata, log),
             "geom": geometry(server, metadata, log),
@@ -364,14 +369,40 @@ def rule_text(h):
 
 # Fixed trace slots, always in this order (empty when a layer is off or has no data), so that a refresh can
 # send only the slots that change: the traffic volume roads are by far the biggest and change once an hour.
-SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "sensors", "sensor_alarm", "singles"] + \
+SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "simulation", "sensors", "sensor_alarm", "singles"] + \
         [f"prov:{p}" for p in PROVIDER_COLOR] + [f"inc:{c}" for c in CATEGORY]
 VOLUME_SLOTS = {"vol:quiet", "vol:busy", "vol:heavy"}
+
+
+def simulation(d, layers):
+    """The running triggered events: a dashed outline per area (map layers) and a SIMULATION label (a trace)."""
+    feats, lat, lon, text, hover = [], [], [], [], []
+    for sc in (d["scenarios"] if "simulation" in layers else []):
+        rings = wkt_coords(sc["area_wkt"])
+        if not rings:
+            continue
+        feats.append({"type": "Feature", "properties": {},
+                      "geometry": {"type": "MultiLineString", "coordinates": [[list(p) for p in r] for r in rings]}})
+        pts = rings[0]
+        what = SCENARIO_LABEL.get(sc["scenario_type"], sc["scenario_type"])
+        lat.append(max(p[1] for p in pts))
+        lon.append(sum(p[0] for p in pts) / len(pts))
+        text.append(f"SIMULATION: {what}")
+        hover.append(f"<b>Simulation: {what}</b>, triggered {hms(sc['started_at'])}<br>Started on purpose by the "
+                     "presenter. The partners report it with a delay; whether it becomes an incident is up to "
+                     "the combination, which never reads this.")
+    layers_out = [{"sourcetype": "geojson", "source": {"type": "FeatureCollection", "features": feats}, "type": "line",
+                   "color": SIM_COLOR, "line": {"width": 2, "dash": [3, 2]}, "below": "traces"}] if feats else []
+    trace = go.Scattermap(lat=lat, lon=lon, mode="text", text=text, textposition="top center",
+                          textfont=dict(color=SIM_COLOR, size=12), name="Triggered events (simulation)",
+                          hovertext=hover, hoverinfo="text")
+    return trace, layers_out
 
 
 def map_traces(d, layers, members):
     geom = d["geom"]
     tr = {}
+    tr["simulation"], tr["_map_layers"] = simulation(d, layers)
     by_class = {k: [] for k in VOLUME}
     if "volume" in layers:
         for r in d["volume"]:
@@ -431,7 +462,8 @@ def map_traces(d, layers, members):
 
 def map_figure(traces):
     fig = go.Figure([traces[k] for k in SLOTS])
-    fig.update_layout(map=dict(style="carto-positron", center=dict(lat=VIEW0["lat"], lon=VIEW0["lon"]), zoom=VIEW0["zoom"]),
+    fig.update_layout(map=dict(style="carto-positron", center=dict(lat=VIEW0["lat"], lon=VIEW0["lon"]), zoom=VIEW0["zoom"],
+                               layers=traces["_map_layers"]),
                       margin=dict(l=0, r=0, t=0, b=0), height=680, uirevision="keep", showlegend=False,
                       paper_bgcolor="#ffffff")
     return fig
@@ -442,6 +474,7 @@ def map_patch(traces):
     for i, k in enumerate(SLOTS):
         if k not in VOLUME_SLOTS:
             p["data"][i] = traces[k].to_plotly_json()
+    p["layout"]["map"]["layers"] = traces["_map_layers"]
     return p
 
 
@@ -502,6 +535,8 @@ def create_dash_app(server, url_base_pathname, metadata):
                     PROVIDER_LABEL[p]]) for p in PROVIDER_COLOR if p != "ROAD_OP"]
         + [html.Span([html.I(style={"background": SINGLE_COLOR, "borderRadius": "50%", "height": "9px", "width": "9px"}),
                       "single report, not confirmed"]),
+           html.Span([html.I(style={"background": "transparent", "borderTop": f"2px dashed {SIM_COLOR}", "height": "0"}),
+                      "triggered on purpose (simulation)"]),
            *[html.Span([html.I(style={"background": c, "borderRadius": "50%"}), lbl.lower()]) for lbl, c in SENSOR_KIND.values()],
            *[html.Span([html.I(style={"background": v[1]}), f"traffic: {v[3]}"]) for v in VOLUME.values()],
            html.Span([html.I(style={"background": "#d97706"}), "roadworks"])],
@@ -533,7 +568,7 @@ def create_dash_app(server, url_base_pathname, metadata):
                           html.Div(id="rule-note", className="muted", style={"marginTop": "6px"})]),
                 html.Div([html.Div("Layers", className="section-title"),
                           dcc.Checklist(id="layers", className="checks",
-                                        value=["events", "incidents", "sensors", "volume"],
+                                        value=["simulation", "events", "incidents", "sensors", "volume"],
                                         options=[{"label": lbl, "value": k} for k, lbl in LAYERS])]),
                 html.Div([html.Div("Refresh", className="section-title"),
                           dcc.Checklist(id="live", className="checks", value=["live"],

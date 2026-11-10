@@ -72,7 +72,7 @@ The simulator plays the partners: six carmakers and a navigation service send SR
 
 1. Map the words to one event, road, place and direction. Event types and aliases: `wrong_way_driver` (wrong_way), `accident` (crash), `slippery_road` (ice), `oil_spill` (oil), `debris` (obstacle), `animal`, `roadworks` (works), `fog` (visibility), `storm` (weather). `simulate_road_safety.py scenarios` lists where each fits.
 2. If the wording leaves the spot open, run with `--dry-run` first and say where it lands ("Fürstenrieder Straße southbound near Laimer Platz, 4 road segments"). If the command says the road doesn't pass the place or the event doesn't fit the road, propose something close instead of forcing it.
-3. Announce the simulation (see ground rules), then run `simulate_road_safety.py trigger <event> --road <road> --near <place> [--direction <dir>]` and show the banner. It says who will report the event and after how many seconds (the defaults per event: `scenarios`).
+3. Announce the simulation (see ground rules), then run `simulate_road_safety.py trigger <event> --road <road> --near <place> [--direction <dir>]` and show the banner. It says who will report the event and after how many seconds. By default the providers report at a stage pace: the first after 5 s, the second after 12 s, the third after 20 s (the road operator's sensor after 8 s), so an incident is confirmed about 15 to 20 s after the trigger. The dashboard shows the triggered spot at once as a dashed outline marked SIMULATION (display only: the combination never reads it).
 4. Stop there: don't wait or poll for the confirmation. The presenter watches it on the dashboard and in the simulator's `--log`. Only when asked ("was it confirmed?", "what happened to the accident?") look it up in `ROAD_SAFETY.INCIDENTS` (current run) and report category, cause, the rule that confirmed it, providers and sensors, the time from the first report to the confirmation (`first_report_at`, `confirmed_at`), confidence and the reach. If it isn't confirmed yet, say why: the providers' delays (in the banner), or only one provider (`--providers`), so it stays a single report.
 
 `trigger <event> --stop` ends one event, `stop-all` ends all of them. The providers then withdraw their events (`cancel`).
@@ -85,6 +85,7 @@ The simulator plays the partners: six carmakers and a navigation service send SR
 | "now a second carmaker reports it" | `trigger oil_spill --providers OEM_A,OEM_D` (no place: changes the running event; delays count from now) |
 | "the road operator's sensor sees it too" / "without the sensor" | `trigger oil_spill --sensor` / `--no-sensor` |
 | "OEM D only after a minute" | `--delay OEM_D=60` (or `--delay 30` for all) |
+| "as slowly as in reality" | `--delay realistic` (each scenario's own delays, 5 to 90 s) |
 | "with low confidence" | `--confidence 0.5` (or `OEM_A=0.9`) |
 
 Not every provider can report everything (`scripts/srti_events.py`): the navigation service has no airbag or ESC data (obstacles and road works only), OEM E and F have no environment sensors (no fog or storm), road works come from the road operator's warning trailer. The command refuses an impossible combination and lists who can; propose one of those.

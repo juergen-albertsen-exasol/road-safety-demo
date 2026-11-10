@@ -33,7 +33,7 @@ Then say **"Start the simulation"** and open <http://127.0.0.1:5100/apps/munich-
    road operator ───── sensor readings ───►│ (sidecar)           │ parse, combine (SQL)               │
  ./demo sim trigger ...                    │                     ▼                                    │
    "an oil spill here, OEM A sees it"      │ srti.confirmed ◄─ INCIDENTS, OUTBOUND_MESSAGES           │
-                                           │     ▲   ./demo service: load, combine, publish every 3 s │
+                                           │     ▲   ./demo service: load, combine, publish (1.5 s)   │
                                            │     └── Dash Server: the dashboard (read-only)           │
                                            └──────────────────────────────────────────────────────────┘
  open data (OSM, City of Munich, Autobahn, DWD, BASt, Unfallatlas) ──► ROAD_DATA (loaded once)

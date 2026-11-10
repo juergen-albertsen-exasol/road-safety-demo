@@ -35,7 +35,7 @@ Everything inside the box is what a partner runs; everything outside is what the
 | **Apache Kafka 4.4** | Transport between the partners and the service. KRaft mode, one node | Sidecar of the deployment; `127.0.0.1:19092` from the laptop, `kafka:9092` from the database |
 | **Kafbat UI** | Shows the topics and messages ("proof that it's Kafka") | Sidecar, <http://127.0.0.1:18080> |
 | **Exasol Kafka connector extension** | Java UDFs: the database pulls the messages from Kafka itself | Schema `KAFKA_EXTENSION`, JAR in BucketFS |
-| **The road safety service** | Every 3 s: load, parse, combine, keep incidents, publish | `scripts/road_safety_service.py` |
+| **The road safety service** | Every 1.5 s: load, parse, combine, keep incidents, publish | `scripts/road_safety_service.py` |
 | **Dash Server** | Hosts the dashboard | <http://127.0.0.1:5100/apps/munich-road-conditions> |
 | **The simulator** | Plays the other partners: events, sensor readings, false alarms; triggers on request | `scripts/simulate_road_safety.py` (outside the box on purpose) |
 
@@ -90,7 +90,7 @@ Sidecars have no volumes, so after `exasol stop`/`start` the topics are empty an
 |---|---|
 | Send to row in Exasol | 2 to 4 s |
 | Parse and combine | about 0.2 s per round |
-| Confirmation | one round after the second provider's first report (seconds); with the default delays 30 to 90 simulated seconds after a trigger |
+| Trigger to dashboard (stage delays, 1x speed) | outline of the triggered spot 1.3 s, first report 9 s, confirmed incident 17 s (with the service at 3 s rounds; 1.5 s is a little faster) |
 | Kafka / Kafbat UI memory | about 370 MB / 310 MB |
 | `exasol start` with the sidecars | 18 s |
 | Load test, 10x speed, 8 scenarios at once | 3,362 messages sent, 3,362 loaded, each Kafka position once |

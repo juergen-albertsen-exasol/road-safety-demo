@@ -55,9 +55,9 @@ CAPABILITIES = {
 }
 KNOWS_CAUSE = {"OEM_A", "OEM_B", "OEM_C", "OEM_D"}   # outside temperature: ice or not
 
-# Per scenario: SRTI category, cause, which providers report it by default and after how many
-# simulation seconds, how long an event is valid, how often it is updated, and whether the road
-# operator's sensor reports it too.
+# Per scenario: SRTI category, cause, which providers report it by default (in this order) and, for the
+# "realistic" delay profile, after how many simulation seconds; how long an event is valid, how often it
+# is updated, and whether the road operator's sensor reports it too.
 SCENARIO_EVENTS = {
     "slippery_road": {"category": "temporary_slippery_road", "cause": "ice",
                       "providers": {"OEM_A": 20, "OEM_C": 45, "OEM_B": 75}, "valid_min": 10, "update_s": 30},
@@ -79,7 +79,32 @@ SCENARIO_EVENTS = {
                   "providers": {}, "valid_min": 120, "update_s": 120},
 }
 DEFAULT_CONFIDENCE = (0.65, 0.9)
-SENSOR_DELAY_S = 30          # the road operator's sensor reports this long after the start
+
+# Delay profiles. "stage" (the default): fast enough to narrate, slow enough to see one source before
+# the second: the providers report after 5, 12, 20, 30 ... seconds in their order. "realistic": the
+# per-scenario delays above, as a real backend's detection might take.
+STAGE_DELAYS = (5, 12, 20, 30, 40, 50, 60)
+SENSOR_DELAY_S = {"stage": 8, "realistic": 30}   # the road operator's sensor
+
+
+def plan_delays(kind: str, steering: dict | None) -> tuple[dict, bool, float]:
+    """Who reports a scenario after how many seconds: ({provider: delay}, sensor reports?, sensor delay).
+    steering: the trigger options stored in SCENARIO_LOG (providers, delay, delay_mode, sensor)."""
+    spec = SCENARIO_EVENTS[kind]
+    st = steering or {}
+    mode = st.get("delay_mode") or "stage"
+    names = list(spec["providers"]) if st.get("providers") is None else list(st["providers"])
+    if mode == "realistic":
+        providers = {p: float(spec["providers"].get(p, 20 + 20 * i)) for i, p in enumerate(names)}
+    else:
+        providers = {p: float(STAGE_DELAYS[min(i, len(STAGE_DELAYS) - 1)]) for i, p in enumerate(names)}
+    for p, d in (st.get("delay") or {}).items():          # explicit --delay wins
+        if p == "*":
+            providers = {q: float(d) for q in providers}
+        elif p in providers:
+            providers[p] = float(d)
+    sensor = st.get("sensor") if st.get("sensor") is not None else spec.get("sensor", False)
+    return providers, bool(sensor), float(SENSOR_DELAY_S[mode])
 
 
 def iso_sim(t: datetime) -> str:

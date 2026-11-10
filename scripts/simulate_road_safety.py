@@ -17,7 +17,7 @@ ROAD_SAFETY.INBOUND_MESSAGES; combining the events into confirmed warnings is up
     .venv/bin/python scripts/simulate_road_safety.py reset --yes      # empty the scenario and state tables
 
 `run` options: --speed (simulation seconds per wall second, default 1), --seed, --weather-day
-(default 2026-10-27), --start (local time, default 06:00), --tick (wall seconds per batch, default 2),
+(default 2026-10-27), --start (local time, default 06:00), --tick (wall seconds per batch, default 1),
 --false-alarms (single unconfirmed reports per simulation hour, default 20), --transport kafka|direct
 (direct writes the same messages into INBOUND_MESSAGES, without Kafka and the loader). --log prints
 every message sent: red = caused by a triggered scenario, yellow = a single false alarm that should
@@ -496,15 +496,8 @@ class Sim:
 
     def wanted(self, sid: int) -> tuple[dict, dict, bool]:
         """Providers with their delay (s), confidence overrides, and whether the road operator's sensor reports."""
-        spec = ev.SCENARIO_EVENTS[self.running[sid].kind]
         st = self.steering.get(sid, {})
-        providers = dict(spec["providers"]) if st.get("providers") is None else dict(st["providers"])
-        for p, d in (st.get("delay") or {}).items():
-            if p == "*":
-                providers = {q: d for q in providers}
-            elif p in providers:
-                providers[p] = d
-        sensor = st.get("sensor") if st.get("sensor") is not None else spec.get("sensor", False)
+        providers, sensor, self._sensor_delay = ev.plan_delays(self.running[sid].kind, st)
         return providers, st.get("confidence") or {}, sensor
 
     def reporting(self, sid: int) -> list[str]:
@@ -519,7 +512,7 @@ class Sim:
         reports = self.reports[sid]
         want = dict(providers)
         if sensor:
-            want["ROAD_OP"] = ev.SENSOR_DELAY_S
+            want["ROAD_OP"] = self._sensor_delay
         for p, delay in want.items():
             if p in reports and reports[p].cancel_at is None and not reports[p].done:
                 continue
@@ -904,6 +897,8 @@ def per_provider(text: str | None, kind: str) -> dict:
     if text is None:
         return {}
     out = {}
+    if kind == "delay" and text.strip().lower() in ("realistic", "stage"):
+        return {}
     for part in text.split(","):
         if "=" in part:
             p, v = part.split("=", 1)
@@ -929,10 +924,13 @@ def steering_from(args, kind: str, sim_now: datetime, t0: datetime) -> dict | No
             able = [p for p in ev.CAPABILITIES if category in ev.CAPABILITIES[p] and p != "ROAD_OP"]
             sys.exit(f"error: {', '.join(unable)} can't report {category.replace('_', ' ')} (see srti_events.py). "
                      f"Providers that can: {', '.join(able)}")
-        default = ev.SCENARIO_EVENTS[kind]["providers"]
-        st["providers"] = {p: default.get(p, 20 + 20 * i) for i, p in enumerate(providers)}
+        st["providers"] = {p: None for p in providers}         # the delay comes from the profile
     if args.delay is not None:
-        st["delay"] = per_provider(args.delay, "delay")
+        mode = args.delay.strip().lower()
+        if mode in ("realistic", "stage"):
+            st["delay_mode"] = mode
+        else:
+            st["delay"] = per_provider(args.delay, "delay")
     if args.confidence is not None:
         st["confidence"] = per_provider(args.confidence, "confidence")
     if args.sensor is not None:
@@ -941,17 +939,10 @@ def steering_from(args, kind: str, sim_now: datetime, t0: datetime) -> dict | No
 
 
 def describe_steering(kind: str, st: dict | None) -> str:
-    spec = ev.SCENARIO_EVENTS[kind]
-    st = st or {}
-    providers = dict(spec["providers"]) if st.get("providers") is None else dict(st["providers"])
-    for p, d in (st.get("delay") or {}).items():
-        if p == "*":
-            providers = {q: d for q in providers}
-        elif p in providers:
-            providers[p] = d
-    sensor = st.get("sensor") if st.get("sensor") is not None else spec.get("sensor", False)
+    providers, sensor, sensor_delay = ev.plan_delays(kind, st)
     who = ", ".join(f"{p} after {d:g} s" for p, d in providers.items()) or "no carmaker"
-    return f"reported by {who}; road operator sensor: {'yes' if sensor else 'no'}"
+    return (f"reported by {who}; road operator sensor: {f'yes, after {sensor_delay:g} s' if sensor else 'no'}"
+            + (" (realistic delays)" if (st or {}).get("delay_mode") == "realistic" else ""))
 
 
 def merge_steering(old: dict, new: dict) -> dict:
@@ -1102,7 +1093,7 @@ def main() -> int:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--weather-day", default="2026-10-27", help="the simulated day: DWD weather and roadworks of it")
     p.add_argument("--start", default="06:00", help="local start time of the simulation")
-    p.add_argument("--tick", type=float, default=2.0, help="wall seconds per batch")
+    p.add_argument("--tick", type=float, default=1.0, help="wall seconds per batch")
     p.add_argument("--duration", type=float, default=0, help="stop after this many simulation seconds")
     p.add_argument("--false-alarms", type=float, default=20.0, help="single unconfirmed reports per simulation hour")
     p.add_argument("--transport", choices=["kafka", "direct"], default="kafka",
@@ -1121,7 +1112,8 @@ def main() -> int:
     p.add_argument("--direction", help='north/south/east/west, in/out (of the city) or "toward <place>"')
     p.add_argument("--at", help='coordinates "lat,lon"')
     p.add_argument("--providers", help='who reports it, e.g. "OEM_A" or "OEM_A,OEM_D" (default: per scenario, see `scenarios`)')
-    p.add_argument("--delay", help='seconds until a provider reports, "30" for all or "OEM_A=20,OEM_D=50"')
+    p.add_argument("--delay", help='seconds until a provider reports: "30" for all, "OEM_A=20,OEM_D=50", or the profile '
+                                   '"realistic" (a real backend\'s pace) instead of the default stage pace (5, 12, 20 s)')
     p.add_argument("--confidence", help='provider confidence 0..1, "0.6" for all or "OEM_A=0.9"')
     p.add_argument("--sensor", action=argparse.BooleanOptionalAction, default=None,
                    help="the road operator's sensor reports it too (--no-sensor: it doesn't)")
