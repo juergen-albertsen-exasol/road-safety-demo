@@ -776,7 +776,7 @@ def create_dash_app(server, url_base_pathname, metadata):
         Input("min-providers", "value"), Input("sensor-replaces", "value"),
         State("map-slots", "data"),
     )
-    def refresh(n, layers, tab, min_providers, sensor_replaces, slots_key):
+    def refresh(n, layers, tab, min_providers, sensor_replaces, slots_key=None):   # None: a page loaded before the key
         if tab != "map" and ctx.triggered_id in ("tick", "tabs"):
             raise PreventUpdate                      # the map tab is hidden: don't query for it
         layers = set(layers or [])
