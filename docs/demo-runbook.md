@@ -138,7 +138,7 @@ Agent:
 
 > *Build a simple dashboard, v1, that shows the road events coming in live from the partners.*
 
-The agent creates `munich-road-events` on Dash Server (about a minute) and explains it. Open <http://127.0.0.1:5100/apps/munich-road-events>.
+The agent creates `munich-road-events` on Dash Server (about 30 seconds) and explains it. Open <http://127.0.0.1:5100/apps/munich-road-events>.
 
 - Three SQL files and a page of Python
 - Dash Server validates, builds, tests the SQL, serves it
