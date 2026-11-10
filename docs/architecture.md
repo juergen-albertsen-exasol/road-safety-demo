@@ -92,7 +92,9 @@ Sidecars have no volumes, so after `exasol stop`/`start` the topics are empty an
 |---|---|
 | Send to row in Exasol | 2 to 4 s |
 | Parse and combine | about 0.2 s per round |
-| Trigger to dashboard (stage delays, 1x speed) | outline of the triggered spot 1.3 s, first report 9 s, confirmed incident 17 s (with the service at 3 s rounds; 1.5 s is a little faster) |
+| Trigger to report in Exasol (stage delays, 1x speed, service as a sidecar) | first report 7 to 8.5 s; with three carmakers confirmed and published after 15 s, third report after 22 s; the dashboard adds up to 2 to 3 s |
+| Road operator sensors | 158 readings a minute, spread over the minute: about 2.6 messages per second |
+| False alarms (default one a minute, kept apart) | 0 confirmed by chance in 5 simulated hours at one every 10 s (Monte Carlo); about 18 per hour without the spacing |
 | Kafka / Kafbat UI memory | about 370 MB / 310 MB |
 | `exasol start` with the sidecars | 18 s |
 | Load test, 10x speed, 8 scenarios at once | 3,362 messages sent, 3,362 loaded, each Kafka position once |

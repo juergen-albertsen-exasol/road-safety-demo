@@ -6,7 +6,9 @@ Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07
 
 ## Revision 2026-11-09: a reference implementation for DFRS partners
 
-**Status: built** (2026-11-09): steps 2 to 7. The demo runs end to end: partners send SRTI events through Kafka, `scripts/road_safety_service.py` loads, combines and publishes them, the dashboard shows it; README, `docs/architecture.md` and the deck explain it. Open: a real DFRS sample (step 1), clearing by absence, and the service as a sidecar of the deployment.
+**Status: built** (2026-11-09): steps 2 to 7. The demo runs end to end: partners send SRTI events through Kafka, `scripts/road_safety_service.py` loads, combines and publishes them, the dashboard shows it; README, `docs/architecture.md` and the deck explain it. Open: a real DFRS sample (step 1) and clearing by absence.
+
+*Update 2026-11-10:* the service runs as a sidecar (`./demo sidecar install`), so one `exasol start` brings up the whole node; Kafka advertises its IP on the deployment network instead of the hosts file; the deployment is called `default`. The road operator's sensors report as a steady stream; false alarms come about once a minute and are kept out of each other's grouping radius. The demo has a simple dashboard v1 the agent builds live (`dashboard-v1/`), and v2 suggests diversions around accidents. The stage flow is in `docs/demo-runbook.md`, the deck has five slides.
 
 ### The pitch
 

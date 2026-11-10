@@ -91,13 +91,13 @@ git clone https://github.com/exasol-labs/dash-server ../dash-server
 
 ```bash
 ./demo sidecar logs -f                                  # the service (a sidecar): one line per published warning
-./demo sim run --start 07:30 --speed 3 --log events     # keep it running: the partners
+./demo sim run --start 07:30 --log events               # keep it running: the partners (a false alarm a minute)
 ./demo sim trigger oil_spill --road A9 --near Freimann --providers OEM_A     # one source: stays a single report
 ./demo sim trigger oil_spill --providers OEM_A,OEM_D                         # a second source: confirmed, published
 ./demo sim trigger oil_spill --stop
 ```
 
-On stage you don't type these: you tell the agent what happens and where, and it explains the simulation and runs the trigger. Event types: `wrong_way_driver`, `accident`, `slippery_road` (ice), `oil_spill`, `debris`, `animal`, `roadworks`, `fog`, `storm`; `./demo sim scenarios` lists them with the places they fit and who reports them. See [AGENTS.md](AGENTS.md#running-the-demo) for the flow.
+On stage you don't type these: you tell the agent what happens and where, and it explains the simulation and runs the trigger. Event types: `wrong_way_driver`, `accident`, `slippery_road` (ice), `oil_spill`, `debris`, `animal`, `roadworks`, `fog`, `storm`; `./demo sim scenarios` lists them with the places they fit and who reports them. See [AGENTS.md](AGENTS.md#running-the-demo) for the rules and [docs/demo-runbook.md](docs/demo-runbook.md) for the stage flow: the sidecars, Kafbat UI, SQL with `exasol connect`, dashboard v1 built live by the agent (`dashboard-v1/`), dashboard v2 with incidents and suggested diversions, one carmaker, then three.
 
 ## Repo layout
 
