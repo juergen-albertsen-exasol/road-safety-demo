@@ -18,6 +18,17 @@ The user is usually a presenter preparing or giving a talk. Two kinds of request
 - **Don't stop the presenter's processes.** The presenter often runs the simulator (`./demo sim run ...`) in a terminal of their own. Before starting a test run, check `pgrep -fl simulate_road_safety`; if one runs, don't start a second (the service follows the newest run). Stop only what you started, by its PID, never with `pkill -f`.
 - **Ask before installing software** (the Exasol Personal launcher, exapump, Dash Server) or changing anything outside this repo. Everything inside the repo and the database deployment `default` is yours to set up.
 
+## MCP servers
+
+Use exactly these two, both registered for this repo in `.mcp.json`:
+
+| Server | Address | For |
+|---|---|---|
+| `exasol-personal` | <http://127.0.0.1:4896/mcp> | Read-only SQL on this demo's database (the deployment `default`): the MCP sidecar of Exasol Personal, started by `exasol start` |
+| `dash-server` | <http://127.0.0.1:5100/mcp> | Creating, deploying and inspecting the dashboards `munich-road-events` (v1) and `munich-road-conditions` (v2); Exasol profile `road-safety-demo` |
+
+The user's client may have other MCP servers connected, some of them Exasol too. Don't use them for this demo: not `exasol` (the starter kit's server, for the other demo's schema `MUNICH_DATASET`), not `Exasol DWH BI MCP` or `Exasol HPC Pilot` (remote company systems, other data), and not document, chat or ticket tools (Google, Slack, Atlassian, Productboard, ...) unless the user asks for them by name. If `exasol-personal` isn't available (ECONNREFUSED: the database is stopped, or it was down when the session started), use `exasol connect -c '<SELECT ...>;'` instead of another server, and tell the user they can reconnect it with `/mcp` once the database runs. Without `dash-server`, the dashboards can't be deployed: ask the user to start Dash Server (`./demo dash`) and reconnect.
+
 ## Setting up the demo
 
 When the user says "set up the demo" (or similar), work through these steps in order. **Check first, act only if needed**: every step can be skipped if its check already passes, so the same procedure also repairs a half-finished setup. After each step, report one line. Stop and explain if a step fails twice.
