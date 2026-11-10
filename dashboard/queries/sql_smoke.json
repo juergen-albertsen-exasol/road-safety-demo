@@ -21,5 +21,6 @@
   },
   "queries/hotspots.sql": {
     "min_accidents": 15
-  }
+  },
+  "queries/route_graph.sql": {}
 }

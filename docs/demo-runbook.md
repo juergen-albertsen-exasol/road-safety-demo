@@ -153,6 +153,7 @@ Browser, <http://127.0.0.1:5100/apps/munich-road-conditions>.
 - Prepared: built over several iterations, takes longer than a demo slot
 - Same Dash Server, same database, more SQL
 - Traffic per road (from real counts), sensors, single reports grey, incidents, published warnings
+- Suggested diversions around an accident: green line, on the card
 - The rule as sliders
 
 ### 8. One carmaker: an oil spill
@@ -179,11 +180,13 @@ Agent:
 |---|---|
 | about 9 s | OEM B's report: one grey dot |
 | about 17 s | OEM C's report: **confirmed**. v2: red marker, incident card, *Published to srti.confirmed*; T2: *INCIDENT CONFIRMED BY EXASOL* |
+| same moment | v2: a green **suggested diversion** around it (via Herzogstraße, Clemensstraße, Wilhelmstraße, about 1 min longer) |
 | about 24 s | OEM E: the card updates to 3 providers |
 
 - Second independent source → confirmed: one SQL query, a fifth of a second
 - Card: which carmakers, vehicles passing in the next 10 minutes
 - Warning published back to Kafka (Kafbat UI: `srti.confirmed` now has messages)
+- Suggested diversion: from the OSM road network, computed on the page; no live traffic
 
 Then in v2: *Different providers needed* → 3.
 

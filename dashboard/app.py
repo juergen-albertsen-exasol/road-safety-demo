@@ -18,6 +18,9 @@ _HELPER = importlib.util.module_from_spec(_HELPER_SPEC)
 _HELPER_SPEC.loader.exec_module(_HELPER)
 load_rows = _HELPER.load_rows
 has_error = _HELPER.has_error
+_DIV_SPEC = importlib.util.spec_from_file_location("road_diversions", Path(__file__).with_name("diversions.py"))
+diversions = importlib.util.module_from_spec(_DIV_SPEC)
+_DIV_SPEC.loader.exec_module(diversions)
 
 APP_DIR = Path(__file__).resolve().parent
 TITLE = "Munich Road Conditions"
@@ -26,7 +29,8 @@ SUBTITLE = ("Safety-related traffic information, confirmed from the SRTI events 
 CAVEAT = ("The carmakers, the navigation service and the road operator are simulated: they send SRTI events and sensor "
           "readings through Kafka, never raw vehicle data. Exasol loads, combines and publishes them with SQL. Traffic "
           "volume is modelled from open data (BASt hourly counts, known hotspots), not measured: nobody shares vehicle "
-          "positions. The road network, roadworks, accident history and weather are open data.")
+          "positions. The road network, roadworks, accident history and weather are open data. Suggested diversions are "
+          "computed on this page from the OSM road network (speed limits, one-way streets), without live traffic.")
 ATTRIBUTION = ("Road network (c) OpenStreetMap contributors (ODbL). Traffic counts: Bundesanstalt fuer Strassenwesen "
                "(CC BY 4.0). Roadworks: City of Munich (dl-de/by-2.0), (c) Die Autobahn GmbH des Bundes. Accidents: "
                "Unfallatlas (dl-de/by-2.0). Weather: Deutscher Wetterdienst (CC BY 4.0).")
@@ -59,7 +63,9 @@ VOLUME = {  # load class -> (lower bound of load, colour, width, label)
 LAYERS = [("simulation", "Triggered events (simulation)"), ("events", "Reports from providers"),
           ("incidents", "Confirmed incidents"), ("sensors", "Road sensors"),
           ("volume", "Traffic volume (modelled)"), ("roadworks", "Roadworks (long-term, real)"),
-          ("accidents", "Accident history (2016-2025)")]
+          ("accidents", "Accident history (2016-2025)"), ("diversions", "Suggested diversions")]
+DIVERT = {"unprotected_accident_area", "unmanaged_blockage", "obstacle_on_road"}   # categories you drive around
+DIVERSION_COLOR = "#16a34a"
 SENSOR_KIND = {"road_weather": ("Road weather station", "#0d9488"), "camera": ("Camera", "#334155"),
                "loop_detector": ("Loop detector", "#64748b"), "warning_trailer": ("Road works warning trailer", "#b45309")}
 STATUS_COLOR = {"new": "#dc2626", "update": "#2563eb", "cleared": "#16a34a"}
@@ -89,6 +95,8 @@ h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; }
 .inc-title { font-weight: 700; font-size: 15px; }
 .inc-meta { font-size: 12px; color: #4b5563; margin-top: 3px; }
 .inc-pub { font-size: 12px; margin-top: 6px; padding: 4px 8px; border-radius: 6px; background: #ecfdf5; color: #065f46; }
+.inc-div { font-size: 12px; margin-top: 6px; padding: 4px 8px; border-radius: 6px; background: #f0fdf4; color: #166534;
+           border-left: 3px solid #16a34a; }
 .inc-nopub { font-size: 12px; margin-top: 6px; padding: 4px 8px; border-radius: 6px; background: #f3f4f6; color: #374151; }
 .trg-box { margin-top: 8px; padding: 6px 10px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; font-size: 12px; }
 .trg-box summary { cursor: pointer; font-weight: 600; color: #991b1b; }
@@ -206,6 +214,7 @@ def wkt_coords(wkt):
 
 _GEOM = {}
 _STATIC = {}
+_ROUTING = {"graph": None, "routes": {}}
 _VOLUME = {"hour": None, "rows": []}
 _CACHE = {"t": 0.0, "key": None, "data": None, "log": []}
 _LOCK = threading.Lock()
@@ -221,6 +230,32 @@ def geometry(server, metadata, log):
                 p = pts[0]
                 _GEOM[int(r["segment_id"])] = [p[0], p[len(p) // 2], p[-1]] if len(p) > 3 else p
     return _GEOM
+
+
+def road_graph(server, metadata, log):
+    """The road network as a routing graph, once per process."""
+    if _ROUTING["graph"] is None:
+        _ROUTING["graph"] = diversions.RoadGraph(run_sql(server, metadata, "route_graph", {}, log))
+    return _ROUTING["graph"]
+
+
+def diversion_for(graph, h):
+    """The suggested diversion around a confirmed incident, or None; computed once per incident position."""
+    if h["srti_category"] not in DIVERT or graph is None:
+        return None
+    hdg = num(h["heading_deg"], None) if h.get("heading_deg") is not None else None
+    key = (round(num(h["lat"]), 4), round(num(h["lon"]), 4), None if hdg is None else int(hdg // 15))
+    if key not in _ROUTING["routes"]:
+        if len(_ROUTING["routes"]) > 500:
+            _ROUTING["routes"].clear()
+        _ROUTING["routes"][key] = graph.diversion(num(h["lat"]), num(h["lon"]), hdg)
+    return _ROUTING["routes"][key]
+
+
+def diversion_text(dv):
+    via = ", ".join(dv["via"]) if dv["via"] else "side streets"
+    extra = "about the same time" if dv["extra_min"] < 0.5 else f"about {dv['extra_min']:.0f} min longer"
+    return f"via {via}: {dv['km']:.1f} km, {extra}"
 
 
 def static(server, metadata, log):
@@ -261,6 +296,7 @@ def fetch(server, metadata, rule, layers):
             "volume": volume(server, metadata, now.hour, log),
             "static": static(server, metadata, log),
             "geom": geometry(server, metadata, log),
+            "graph": road_graph(server, metadata, log),
         }
         _CACHE.update(t=time.time(), key=key, data=data, log=log)
         return data, list(log)
@@ -369,7 +405,8 @@ def rule_text(h):
 
 # Fixed trace slots, always in this order (empty when a layer is off or has no data), so that a refresh can
 # send only the slots that change: the traffic volume roads are by far the biggest and change once an hour.
-SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "simulation", "sensors", "sensor_alarm", "singles"] + \
+SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "diversions", "simulation", "sensors", "sensor_alarm",
+         "singles"] + \
         [f"prov:{p}" for p in PROVIDER_COLOR] + [f"inc:{c}" for c in CATEGORY]
 VOLUME_SLOTS = {"vol:quiet", "vol:busy", "vol:heavy"}
 
@@ -449,6 +486,20 @@ def map_traces(d, layers, members):
             lat=[num(e["lat"]) for e in es], lon=[num(e["lon"]) for e in es], mode="markers",
             name=f"Reports of {PROVIDER_LABEL[p]}", marker=dict(size=11, color=color, opacity=0.95),
             text=[event_text(e, True) for e in es], hoverinfo="text")
+    lat, lon, hover = [], [], []
+    for h in (d["live"] if "diversions" in layers else []):
+        dv = diversion_for(d["graph"], h) if yes(h["confirmed"]) else None
+        if not dv:
+            continue
+        text = (f"<b>Suggested diversion</b> around the {cat_label(h['srti_category']).lower()} on "
+                f"{h['road'] or dv['blocked'] or 'this road'}<br>{diversion_text(dv)}")
+        for line in dv["lines"]:
+            lon += [p[0] for p in line] + [None]
+            lat += [p[1] for p in line] + [None]
+            hover += [text] * len(line) + [None]
+    tr["diversions"] = go.Scattermap(lat=lat, lon=lon, mode="lines", name="Suggested diversions",
+                                     line=dict(width=6, color=DIVERSION_COLOR), opacity=0.75,
+                                     text=hover, hoverinfo="text", connectgaps=False)
     inc = [h for h in d["live"] if yes(h["confirmed"])] if "incidents" in layers else []
     for c, (label, color) in CATEGORY.items():
         hs = [h for h in inc if h["srti_category"] == c]
@@ -539,7 +590,8 @@ def create_dash_app(server, url_base_pathname, metadata):
                       "triggered on purpose (simulation)"]),
            *[html.Span([html.I(style={"background": c, "borderRadius": "50%"}), lbl.lower()]) for lbl, c in SENSOR_KIND.values()],
            *[html.Span([html.I(style={"background": v[1]}), f"traffic: {v[3]}"]) for v in VOLUME.values()],
-           html.Span([html.I(style={"background": "#d97706"}), "roadworks"])],
+           html.Span([html.I(style={"background": "#d97706"}), "roadworks"]),
+           html.Span([html.I(style={"background": DIVERSION_COLOR, "height": "5px"}), "suggested diversion"])],
         className="legend")
 
     app.layout = html.Div([
@@ -568,7 +620,7 @@ def create_dash_app(server, url_base_pathname, metadata):
                           html.Div(id="rule-note", className="muted", style={"marginTop": "6px"})]),
                 html.Div([html.Div("Layers", className="section-title"),
                           dcc.Checklist(id="layers", className="checks",
-                                        value=["simulation", "events", "incidents", "sensors", "volume"],
+                                        value=["simulation", "events", "incidents", "sensors", "volume", "diversions"],
                                         options=[{"label": lbl, "value": k} for k, lbl in LAYERS])]),
                 html.Div([html.Div("Refresh", className="section-title"),
                           dcc.Checklist(id="live", className="checks", value=["live"],
@@ -701,6 +753,9 @@ def create_dash_app(server, url_base_pathname, metadata):
                              + f"; confidence {num(h['confidence']):.0%}", className="inc-meta"),
                     html.Div(f"First report {first:%H:%M:%S}; valid until {hms(h['valid_until'])}; {reach_text(h)}"
                              if first else reach_text(h), className="inc-meta")]
+            dv = diversion_for(d["graph"], h)
+            if dv:
+                body.append(html.Div([html.B("Suggested diversion "), diversion_text(dv)], className="inc-div"))
             if pub:
                 conf_at = ts(pub["confirmed_at"])
                 secs = int((conf_at - ts(pub["first_report_at"])).total_seconds()) if conf_at and pub["first_report_at"] else 0

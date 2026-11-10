@@ -80,7 +80,7 @@ Everything inside the box is what a partner runs; everything outside is what the
 
 **6. Publish.** Every new, changed or cleared incident goes to the topic `srti.confirmed` as a warning (`srti-incident/1`: category, cause, position, validity, confidence, the rule that confirmed it, the reach, and an attribution of the sources as the usage policies require), logged in `OUTBOUND_MESSAGES` with its Kafka offset.
 
-**7. Show.** The dashboard reads with a read-only user: events as dots in the provider's colour (grey while unconfirmed), sensors, incidents with evidence and reach, the outbound ticker, data offers and contracts, and an event stream. Its sliders run the same `combine.sql` with another rule as a what-if; the service keeps publishing with the default rule.
+**7. Show.** The dashboard reads with a read-only user: events as dots in the provider's colour (grey while unconfirmed), sensors, incidents with evidence and reach, the outbound ticker, data offers and contracts, and an event stream. Its sliders run the same `combine.sql` with another rule as a what-if; the service keeps publishing with the default rule. For accidents, blocked roads and obstacles it suggests a diversion: the fastest route around the blocked segment on the OSM road network, computed on the page (`dashboard/diversions.py`), without live traffic.
 
 ## Restarts: Kafka keeps nothing, Exasol keeps everything
 
