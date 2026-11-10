@@ -31,7 +31,7 @@ Database stopped: `exasol start` (about 20 s, starts the sidecars and the servic
 
 | Window | What |
 |---|---|
-| T1 | Terminal for your commands: sidecar status, `exasol connect` |
+| T1 | Terminal for your commands: sidecar status, the SQL prompt (`exasol connect`) |
 | T2 | The simulation (`--log events`): every message the partners send, one grey line per minute for the road operator's sensors, the incident banners |
 | Agent | Claude Code (or your agent) in the repo folder |
 | Browser | Kafbat UI <http://127.0.0.1:18080>; dashboard v2 <http://127.0.0.1:5100/apps/munich-road-conditions> (layers: all on except roadworks and accident history); v1 opens in step 6 |
@@ -85,14 +85,25 @@ Browser, <http://127.0.0.1:18080> → Topics.
 T1:
 
 ```bash
-exasol connect -c 'SELECT "topic", COUNT(*) AS "messages", MAX("loaded_at") AS "last_loaded" FROM ROAD_SAFETY.INBOUND_MESSAGES GROUP BY 1 ORDER BY 1;'
+exasol connect
 ```
 
-```bash
-exasol connect -c 'SELECT "detected_at", "provider", "status", "srti_category", "road", "topic", "kafka_offset" FROM ROAD_SAFETY.SRTI_EVENTS WHERE "sim_run_id" = (SELECT MAX("run_id") FROM ROAD_SAFETY.SIM_STATE) ORDER BY "detected_at" DESC LIMIT 5;'
+At the SQL prompt (a statement runs at its `;`, it may span several lines):
+
+```sql
+SELECT "topic", COUNT(*) AS "messages", MAX("loaded_at") AS "last_loaded"
+FROM ROAD_SAFETY.INBOUND_MESSAGES
+GROUP BY 1 ORDER BY 1;
 ```
 
-(Or `exasol connect` without `-c` for an interactive SQL prompt.)
+```sql
+SELECT "detected_at", "provider", "status", "srti_category", "road", "topic", "kafka_offset"
+FROM ROAD_SAFETY.SRTI_EVENTS
+WHERE "sim_run_id" = (SELECT MAX("run_id") FROM ROAD_SAFETY.SIM_STATE)
+ORDER BY "detected_at" DESC LIMIT 5;
+```
+
+Run the first one twice, a few seconds apart: the counts grow. `exit` leaves the prompt.
 
 - The database pulls the topics itself (Kafka connector, Java UDFs), 2–4 s from send to row
 - `INBOUND_MESSAGES`: every message, raw, with its Kafka offset
