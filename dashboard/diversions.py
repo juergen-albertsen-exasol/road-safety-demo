@@ -97,6 +97,19 @@ class RoadGraph:
             prev, node = self.seg[t], n
         return node, done, path
 
+    def upstream(self, lat, lon, hdg, metres=2000):
+        """The stretch of the same road before the incident, against the traffic: where drivers get warned."""
+        hit = self.blocked(lat, lon, hdg)
+        if hit is None:
+            return []
+        sid, fwd = hit
+        _, _, path = self._walk(sid, fwd, metres, back=True)
+        lines = []
+        for s, f in [(sid, fwd)] + path:
+            pts = self.seg[s]["pts"]
+            lines.append(pts if f else pts[::-1])
+        return lines
+
     # ---- routing
     def route(self, start, goal, banned, max_cost=3600.0):
         dist, prev, heap = {start: 0.0}, {}, [(0.0, start)]

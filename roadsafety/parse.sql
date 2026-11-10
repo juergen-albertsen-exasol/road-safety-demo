@@ -1,5 +1,5 @@
--- Parse new messages from INBOUND_MESSAGES (raw JSON, as received from Kafka) into SRTI_EVENTS and
--- SENSOR_READINGS. Run by scripts/road_safety_service.py every few seconds, statement by statement.
+-- Parse new messages from INBOUND_MESSAGES (raw JSON, as received from Kafka) into SRTI_EVENTS,
+-- SENSOR_READINGS and WARNING_RECEIPTS (the consumers' receipts for the published warnings). Run by scripts/road_safety_service.py every few seconds, statement by statement.
 --
 -- PARSE_STATE keeps, per topic id and partition, the offset parsed up to (last_offset). Each round
 -- first fixes the upper end (next_offset = what is there now), parses everything in between, then
@@ -57,5 +57,29 @@ FROM ROAD_SAFETY.INBOUND_MESSAGES m
 JOIN ROAD_SAFETY.PARSE_STATE p ON p."topic_id" = m."topic_id" AND p."kafka_partition" = m."kafka_partition"
 WHERE m."kafka_offset" > p."last_offset" AND m."kafka_offset" <= p."next_offset"
   AND JSON_VALUE(m."payload", '$.message_type') = 'sensor_reading';
+
+INSERT INTO ROAD_SAFETY.WARNING_RECEIPTS
+SELECT m."topic", m."topic_id", m."kafka_partition", m."kafka_offset",
+       JSON_VALUE(m."payload", '$.consumer'),
+       JSON_VALUE(m."payload", '$.consumer_group'),
+       JSON_VALUE(m."payload", '$.incident_id'),
+       JSON_VALUE(m."payload", '$.version' RETURNING DECIMAL(9,0)),
+       JSON_VALUE(m."payload", '$.status'),
+       JSON_VALUE(m."payload", '$.srti_category'),
+       JSON_VALUE(m."payload", '$.warning_offset' RETURNING DECIMAL(36,0)),
+       CAST(REPLACE(SUBSTR(JSON_VALUE(m."payload", '$.warning_sent_at'), 1, 23), 'T', ' ') AS TIMESTAMP),
+       CAST(REPLACE(SUBSTR(JSON_VALUE(m."payload", '$.received_at'), 1, 23), 'T', ' ') AS TIMESTAMP),
+       JSON_VALUE(m."payload", '$.vehicles' RETURNING DECIMAL(9,0)),
+       JSON_VALUE(m."payload", '$.sign_lat' RETURNING DOUBLE),
+       JSON_VALUE(m."payload", '$.sign_lon' RETURNING DOUBLE),
+       JSON_VALUE(m."payload", '$.sign_road'),
+       JSON_VALUE(m."payload", '$.sign_text'),
+       JSON_VALUE(m."payload", '$.action'),
+       JSON_VALUE(m."payload", '$.sim_run_id' RETURNING DECIMAL(9,0)),
+       CURRENT_TIMESTAMP
+FROM ROAD_SAFETY.INBOUND_MESSAGES m
+JOIN ROAD_SAFETY.PARSE_STATE p ON p."topic_id" = m."topic_id" AND p."kafka_partition" = m."kafka_partition"
+WHERE m."kafka_offset" > p."last_offset" AND m."kafka_offset" <= p."next_offset"
+  AND JSON_VALUE(m."payload", '$.message_type') = 'warning_receipt';
 
 UPDATE ROAD_SAFETY.PARSE_STATE SET "last_offset" = "next_offset" WHERE "last_offset" < "next_offset"

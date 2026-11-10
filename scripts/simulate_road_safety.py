@@ -18,7 +18,8 @@ ROAD_SAFETY.INBOUND_MESSAGES; combining the events into confirmed warnings is up
 
 `run` options: --speed (simulation seconds per wall second, default 1), --seed, --weather-day
 (default 2026-10-27), --start (local time, default 06:00), --tick (wall seconds per batch, default 1),
---false-alarms (single unconfirmed reports per simulation hour, default 60: one a minute), --transport kafka|direct
+--false-alarms (single unconfirmed reports per simulation hour, default 60: one a minute),
+--no-consumers (without the simulated receivers of the confirmed warnings, scripts/warning_consumers.py), --transport kafka|direct
 (direct writes the same messages into INBOUND_MESSAGES, without Kafka and the loader). --log prints
 every message sent: red = caused by a triggered scenario, yellow = a single false alarm that should
 never be confirmed, grey = routine sensor readings (--log events prints them in one short line per second).
@@ -724,7 +725,7 @@ class Sim:
 class MessageLog:
     """Prints every message the partners send. red: caused by a triggered scenario (should lead to an
     incident); yellow: a single false alarm (must never be confirmed); grey: routine sensor readings."""
-    GREY, YELLOW, RED, BOLD, RESET = "\033[90m", "\033[33m", "\033[31m", "\033[1m", "\033[0m"
+    GREY, YELLOW, RED, CYAN, BOLD, RESET = "\033[90m", "\033[33m", "\033[31m", "\033[36m", "\033[1m", "\033[0m"
 
     def __init__(self, sim, mode: str):
         self.sim, self.mode = sim, mode
@@ -737,7 +738,8 @@ class MessageLog:
     def legend(self):
         print(self.c(self.BOLD, "Message log: ") + self.c(self.RED, "red = reports of a triggered scenario, ")
               + self.c(self.YELLOW, "yellow = a single false alarm (must not be confirmed), ")
-              + self.c(self.GREY, "grey = routine sensor readings" + (" (one short line per second)" if self.mode == "events" else "")),
+              + self.c(self.GREY, "grey = routine sensor readings" + (" (one short line per second)" if self.mode == "events" else "") + ", ")
+              + self.c(self.CYAN, "cyan = who received a confirmed warning"),
               flush=True)
 
     def events(self, msgs):
@@ -872,6 +874,9 @@ def run(args) -> None:
     if log:
         log.legend()
         IncidentWatcher(args.deployment, log, sim.run_id).start()
+    if args.transport == "kafka" and not args.no_consumers:   # who receives the confirmed warnings
+        from warning_consumers import Consumers
+        Consumers(KAFKA, sim.run_id, sim.graph, FLEET, log).start()
     counts = defaultdict(int)
     try:
         while not stop["flag"]:
@@ -1145,6 +1150,8 @@ def main() -> int:
     p.add_argument("--start", default="06:00", help="local start time of the simulation")
     p.add_argument("--tick", type=float, default=1.0, help="wall seconds per batch")
     p.add_argument("--duration", type=float, default=0, help="stop after this many simulation seconds")
+    p.add_argument("--no-consumers", action="store_true",
+                   help="don't simulate the receivers of the confirmed warnings (scripts/warning_consumers.py)")
     p.add_argument("--false-alarms", type=float, default=60.0,
                    help="single unconfirmed reports per simulation hour (default 60: one a minute, a demo rate)")
     p.add_argument("--transport", choices=["kafka", "direct"], default="kafka",

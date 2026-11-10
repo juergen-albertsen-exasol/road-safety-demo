@@ -63,9 +63,14 @@ VOLUME = {  # load class -> (lower bound of load, colour, width, label)
 LAYERS = [("simulation", "Triggered events (simulation)"), ("events", "Reports from providers"),
           ("incidents", "Confirmed incidents"), ("sensors", "Road sensors"),
           ("volume", "Traffic volume (modelled)"), ("roadworks", "Roadworks (long-term, real)"),
-          ("accidents", "Accident history (2016-2025)"), ("diversions", "Suggested diversions")]
+          ("accidents", "Accident history (2016-2025)"), ("diversions", "Suggested diversions"),
+          ("warnings", "Warnings received: warned stretch, message signs")]
 DIVERT = {"unprotected_accident_area", "unmanaged_blockage", "obstacle_on_road"}   # categories you drive around
 DIVERSION_COLOR = "#16a34a"
+WARNED_COLOR = "#f97316"          # the stretch before an incident where drivers get the warning
+SIGN_COLOR = "#0e7490"            # the road operator's message signs
+CONSUMER_LABEL = {"OEM_A": "OEM A", "OEM_B": "OEM B", "OEM_C": "OEM C", "OEM_D": "OEM D", "OEM_E": "OEM E",
+                  "OEM_F": "OEM F", "NAV": "Navigation", "ROAD_OP": "Road operator"}
 SENSOR_KIND = {"road_weather": ("Road weather station", "#0d9488"), "camera": ("Camera", "#334155"),
                "loop_detector": ("Loop detector", "#64748b"), "warning_trailer": ("Road works warning trailer", "#b45309")}
 STATUS_COLOR = {"new": "#dc2626", "update": "#2563eb", "cleared": "#16a34a"}
@@ -97,6 +102,8 @@ h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; }
 .inc-pub { font-size: 12px; margin-top: 6px; padding: 4px 8px; border-radius: 6px; background: #ecfdf5; color: #065f46; }
 .inc-div { font-size: 12px; margin-top: 6px; padding: 4px 8px; border-radius: 6px; background: #f0fdf4; color: #166534;
            border-left: 3px solid #16a34a; }
+.inc-recv { font-size: 12px; margin-top: 6px; padding: 4px 8px; border-radius: 6px; background: #ecfeff; color: #155e75;
+            border-left: 3px solid #0e7490; }
 .inc-nopub { font-size: 12px; margin-top: 6px; padding: 4px 8px; border-radius: 6px; background: #f3f4f6; color: #374151; }
 .trg-box { margin-top: 8px; padding: 6px 10px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; font-size: 12px; }
 .trg-box summary { cursor: pointer; font-weight: 600; color: #991b1b; }
@@ -252,6 +259,35 @@ def diversion_for(graph, h):
     return _ROUTING["routes"][key]
 
 
+def upstream_for(graph, h):
+    """The warned stretch before a spot incident (not for fog or storm areas), cached per position."""
+    if graph is None or h.get("reach_kind") == "in_area":
+        return []
+    hdg = num(h["heading_deg"], None) if h.get("heading_deg") is not None else None
+    key = ("up", round(num(h["lat"]), 4), round(num(h["lon"]), 4), None if hdg is None else int(hdg // 15))
+    if key not in _ROUTING["routes"]:
+        _ROUTING["routes"][key] = graph.upstream(num(h["lat"]), num(h["lon"]), hdg)
+    return _ROUTING["routes"][key]
+
+
+def receipts_text(rows):
+    """Who received an incident's warnings: vehicles per carmaker, app users, the sign."""
+    if not rows:
+        return None
+    cars = [r for r in rows if r["consumer"] != "ROAD_OP" and r["status"] != "cleared"]
+    sign = next((r for r in rows if r["consumer"] == "ROAD_OP"), None)
+    n = int(sum(num(r["vehicles"]) for r in cars))
+    parts = [f"{CONSUMER_LABEL.get(r['consumer'], r['consumer'])} {int(num(r['vehicles']))}"
+             for r in sorted(cars, key=lambda r: r["consumer"])]
+    text = f"by {len(rows)} consumers: {n:,} drivers warned ({', '.join(parts)})" if cars else f"by {len(rows)} consumers"
+    if sign and sign.get("sign_text"):
+        text += f"; message sign on {sign['sign_road']}: \"{sign['sign_text']}\""
+    secs = rows[0].get("first_secs")
+    if secs is not None:
+        text += f"; first {num(secs):.1f} s after publishing"
+    return text
+
+
 def diversion_text(dv):
     via = ", ".join(dv["via"]) if dv["via"] else "side streets"
     extra = "about the same time" if dv["extra_min"] < 0.5 else f"about {dv['extra_min']:.0f} min longer"
@@ -293,6 +329,7 @@ def fetch(server, metadata, rule, layers):
             "sensors": run_sql(server, metadata, "sensor_latest", {}, log) if "sensors" in layers else [],
             "offers": run_sql(server, metadata, "offers", {}, log),
             "scenarios": run_sql(server, metadata, "scenarios_active", {}, log),
+            "receipts": run_sql(server, metadata, "receipts", {}, log),
             "volume": volume(server, metadata, now.hour, log),
             "static": static(server, metadata, log),
             "geom": geometry(server, metadata, log),
@@ -405,8 +442,8 @@ def rule_text(h):
 
 # Fixed trace slots, always in this order (empty when a layer is off or has no data), so that a refresh can
 # send only the slots that change: the traffic volume roads are by far the biggest and change once an hour.
-SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "diversions", "simulation", "sensors", "sensor_alarm",
-         "singles"] + \
+SLOTS = ["vol:quiet", "vol:busy", "vol:heavy", "accidents", "roadworks", "warned", "diversions", "simulation", "sensors",
+         "sensor_alarm", "signs", "singles"] + \
         [f"prov:{p}" for p in PROVIDER_COLOR] + [f"inc:{c}" for c in CATEGORY]
 VOLUME_SLOTS = {"vol:quiet", "vol:busy", "vol:heavy"}
 
@@ -486,6 +523,31 @@ def map_traces(d, layers, members):
             lat=[num(e["lat"]) for e in es], lon=[num(e["lon"]) for e in es], mode="markers",
             name=f"Reports of {PROVIDER_LABEL[p]}", marker=dict(size=11, color=color, opacity=0.95),
             text=[event_text(e, True) for e in es], hoverinfo="text")
+    by_inc: dict = {}
+    for r in d["receipts"]:
+        by_inc.setdefault(r["incident_id"], []).append(r)
+    lat, lon, hover = [], [], []
+    for h in (d["live"] if "warnings" in layers else []):
+        pub = match_published(h, d["published"]) if yes(h["confirmed"]) else None
+        if not pub or pub["incident_id"] not in by_inc:
+            continue                                   # no consumer has received it (yet)
+        text = (f"<b>Warned stretch</b> before the {cat_label(h['srti_category']).lower()} on {h['road'] or 'this road'}"
+                f"<br>Received {receipts_text(by_inc[pub['incident_id']])}")
+        for line in upstream_for(d["graph"], h):
+            lon += [p[0] for p in line] + [None]
+            lat += [p[1] for p in line] + [None]
+            hover += [text] * len(line) + [None]
+    tr["warned"] = go.Scattermap(lat=lat, lon=lon, mode="lines", name="Warned stretch",
+                                 line=dict(width=12, color=WARNED_COLOR), opacity=0.35, text=hover, hoverinfo="text",
+                                 connectgaps=False)
+    signs = [r for r in d["receipts"] if r["consumer"] == "ROAD_OP" and r.get("sign_text") and r["status"] != "cleared"
+             and r.get("sign_lat") is not None] if "warnings" in layers else []
+    tr["signs"] = go.Scattermap(
+        lat=[num(r["sign_lat"]) for r in signs], lon=[num(r["sign_lon"]) for r in signs], mode="markers+text",
+        name="Message signs", marker=dict(size=15, color=SIGN_COLOR, opacity=0.95),
+        text=[r["sign_text"] for r in signs], textposition="middle right", textfont=dict(color=SIGN_COLOR, size=11),
+        hovertext=[f"<b>Message sign</b> of the road operator on {r['sign_road']}: \"{r['sign_text']}\"<br>switched for "
+                   f"{r['incident_id']} (receipt on srti.receipts)" for r in signs], hoverinfo="text")
     lat, lon, hover = [], [], []
     for h in (d["live"] if "diversions" in layers else []):
         dv = diversion_for(d["graph"], h) if yes(h["confirmed"]) else None
@@ -591,7 +653,9 @@ def create_dash_app(server, url_base_pathname, metadata):
            *[html.Span([html.I(style={"background": c, "borderRadius": "50%"}), lbl.lower()]) for lbl, c in SENSOR_KIND.values()],
            *[html.Span([html.I(style={"background": v[1]}), f"traffic: {v[3]}"]) for v in VOLUME.values()],
            html.Span([html.I(style={"background": "#d97706"}), "roadworks"]),
-           html.Span([html.I(style={"background": DIVERSION_COLOR, "height": "5px"}), "suggested diversion"])],
+           html.Span([html.I(style={"background": DIVERSION_COLOR, "height": "5px"}), "suggested diversion"]),
+           html.Span([html.I(style={"background": WARNED_COLOR, "height": "8px", "opacity": "0.5"}), "warned stretch"]),
+           html.Span([html.I(style={"background": SIGN_COLOR, "borderRadius": "50%"}), "message sign switched"])],
         className="legend")
 
     app.layout = html.Div([
@@ -620,7 +684,8 @@ def create_dash_app(server, url_base_pathname, metadata):
                           html.Div(id="rule-note", className="muted", style={"marginTop": "6px"})]),
                 html.Div([html.Div("Layers", className="section-title"),
                           dcc.Checklist(id="layers", className="checks",
-                                        value=["simulation", "events", "incidents", "sensors", "volume", "diversions"],
+                                        value=["simulation", "events", "incidents", "sensors", "volume", "diversions",
+                                               "warnings"],
                                         options=[{"label": lbl, "value": k} for k, lbl in LAYERS])]),
                 html.Div([html.Div("Refresh", className="section-title"),
                           dcc.Checklist(id="live", className="checks", value=["live"],
@@ -753,6 +818,7 @@ def create_dash_app(server, url_base_pathname, metadata):
                              + f"; confidence {num(h['confidence']):.0%}", className="inc-meta"),
                     html.Div(f"First report {first:%H:%M:%S}; valid until {hms(h['valid_until'])}; {reach_text(h)}"
                              if first else reach_text(h), className="inc-meta")]
+            recv = receipts_text([r for r in d["receipts"] if pub and r["incident_id"] == pub["incident_id"]])
             dv = diversion_for(d["graph"], h)
             if dv:
                 body.append(html.Div([html.B("Suggested diversion "), diversion_text(dv)], className="inc-div"))
@@ -762,6 +828,8 @@ def create_dash_app(server, url_base_pathname, metadata):
                 body.append(html.Div(f"Published as {pub['incident_id']}: confirmed {conf_at:%H:%M:%S}, {secs} s after the "
                                      f"first report; {plural(pub['messages'], 'warning')} sent so far (version "
                                      f"{int(num(pub['version']))})", className="inc-pub"))
+                body.append(html.Div([html.B("Received "), recv or "no receipt yet: the consumers run with the simulator"],
+                                     className="inc-recv"))
             else:
                 body.append(html.Div("Not published: the service uses the default rule (2 providers, or 1 and a road "
                                      "operator sensor). This is what the rule set on this page would add.",

@@ -114,3 +114,30 @@ CREATE TABLE IF NOT EXISTS ROAD_SAFETY.CONTRACTS (
     "agreed_on"        DATE,
     "usage_policy"     VARCHAR(400)
 )
+;
+
+-- Receipts of the consumers of srti.confirmed (topic srti.receipts, scripts/warning_consumers.py): who received
+-- which warning, when, and what they did with it. With OUTBOUND_MESSAGES: what was passed on, and to whom.
+CREATE TABLE IF NOT EXISTS ROAD_SAFETY.WARNING_RECEIPTS (
+    "topic"            VARCHAR(200) NOT NULL,
+    "topic_id"         VARCHAR(36) NOT NULL,
+    "kafka_partition"  DECIMAL(18,0) NOT NULL,
+    "kafka_offset"     DECIMAL(36,0) NOT NULL,
+    "consumer"         VARCHAR(20) NOT NULL,      -- OEM_A ... OEM_F, NAV, ROAD_OP
+    "consumer_group"   VARCHAR(100),              -- its Kafka consumer group
+    "incident_id"      VARCHAR(40) NOT NULL,
+    "version"          DECIMAL(9,0) NOT NULL,
+    "status"           VARCHAR(10) NOT NULL,      -- new, update, cleared (of the warning received)
+    "srti_category"    VARCHAR(40),
+    "warning_offset"   DECIMAL(36,0),             -- its position in srti.confirmed
+    "warning_sent_at"  TIMESTAMP,                 -- UTC, when the service published it
+    "received_at"      TIMESTAMP,                 -- UTC, when the consumer got it
+    "vehicles"         DECIMAL(9,0),              -- carmakers, navigation: vehicles or app users warned
+    "sign_lat"         DOUBLE,                    -- road operator: the message sign it switched
+    "sign_lon"         DOUBLE,
+    "sign_road"        VARCHAR(200),
+    "sign_text"        VARCHAR(200),              -- empty: switched off
+    "action"           VARCHAR(400),
+    "sim_run_id"       DECIMAL(9,0),
+    "parsed_at"        TIMESTAMP
+)

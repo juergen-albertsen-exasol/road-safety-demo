@@ -77,6 +77,7 @@ Browser, <http://127.0.0.1:18080> → Topics.
 | A message as it travels | `datex.road-operator` → Messages → open one: the JSON of a sensor reading |
 | An SRTI event | a topic with a false alarm (the yellow line in T2) → Messages: category, DATEX II type, position, validity, confidence |
 | The outbound topic | `srti.confirmed`: empty until the first incident |
+| Who listens | Consumers: `warning-consumer.oem-a` … `oem-f`, `.nav`, `.road-operator`: the receivers of the warnings |
 
 - Plain Apache Kafka, Apache 2.0, a sidecar on this laptop
 - Finished events, never raw vehicle data
@@ -187,6 +188,8 @@ Agent:
 - Card: which carmakers, vehicles passing in the next 10 minutes
 - Warning published back to Kafka (Kafbat UI: `srti.confirmed` now has messages)
 - Suggested diversion: from the OSM road network, computed on the page; no live traffic
+- Received by: carmakers warn their vehicles, the app its users, the road operator switches a sign (T2: cyan line; v2: card, orange stretch, sign)
+- Receipts come back through Kafka into Exasol: who got which warning, when
 
 Then in v2: *Different providers needed* → 3.
 
@@ -196,9 +199,9 @@ Then in v2: *Different providers needed* → 3.
 
 ### 10. Questions, clean up
 
-Agent: *"Which warnings did we publish, and which reports confirmed them?"*
+Agent: *"Which warnings did we publish, which reports confirmed them, and who received them?"*
 
-- Kafka keeps nothing, Exasol keeps everything: the audit trail
+- Kafka keeps nothing, Exasol keeps everything: in, confirmed, out, and who received it: the audit trail
 
 Clean up: *"Stop all events."*: the carmakers withdraw, the clearing is published too.
 
