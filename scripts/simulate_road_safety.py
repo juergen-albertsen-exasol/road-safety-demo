@@ -72,6 +72,7 @@ from zoneinfo import ZoneInfo
 
 import pyexasol
 
+import db
 import road_scenarios as rs
 import road_traffic as rt
 import srti_events as ev
@@ -109,36 +110,10 @@ FALSE_ALARM_VALID_MIN = 10
 
 # --------------------------------------------------------------------------- database
 def connect(deployment: str) -> pyexasol.ExaConnection:
-    secrets = Path.home() / ".exasol" / "personal" / "deployments" / deployment / "secrets.json"
-    if not secrets.exists():
-        sys.exit(f"error: {secrets} not found; is the Exasol Personal deployment '{deployment}' installed?")
-    password = json.loads(secrets.read_text())["dbPassword"]
-    return pyexasol.connect(dsn="127.0.0.1:8563", user="sys", password=password, encryption=True,
-                            websocket_sslopt={"cert_reqs": ssl.CERT_NONE}, compression=True,
-                            autocommit=True, fetch_dict=True,
-                            fetch_mapper=pyexasol.exasol_mapper)
+    return db.connect(deployment, dict_rows=True, compression=True)
 
 
-def lit(v) -> str:
-    if v is None:
-        return "NULL"
-    if isinstance(v, bool):
-        return "TRUE" if v else "FALSE"
-    if isinstance(v, (int, float, Decimal)):
-        return str(v)
-    if isinstance(v, datetime):
-        return "'" + v.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + "'"
-    return "'" + str(v).replace("'", "''") + "'"
-
-
-def insert(c, table: str, rows: list[tuple], chunk: int = 4000) -> None:
-    for i in range(0, len(rows), chunk):
-        values = ",".join("(" + ",".join(lit(v) for v in r) + ")" for r in rows[i:i + chunk])
-        c.execute(f"INSERT INTO ROAD_SAFETY.{table} VALUES {values}")
-
-
-def wall_now() -> datetime:
-    return datetime.now(BERLIN).replace(tzinfo=None)
+lit, insert, wall_now = db.lit, db.insert, db.wall_now
 
 
 # --------------------------------------------------------------------------- road graph
@@ -1067,11 +1042,11 @@ def status(args) -> None:
         print({k: str(v) for k, v in r.items()})
     print(f"  SCENARIO_LOG: {c.execute('SELECT COUNT(*) FROM ROAD_SAFETY.SCENARIO_LOG').fetchval():,} rows")
     try:
-        for r in c.execute('SELECT "topic", COUNT(*) AS n, MAX("loaded_at") AS last FROM ROAD_SAFETY.INBOUND_MESSAGES '
+        for r in c.execute('SELECT "topic", COUNT(*) AS "n", MAX("loaded_at") AS "last_loaded" FROM ROAD_SAFETY.INBOUND_MESSAGES '
                            'GROUP BY 1 ORDER BY 1'):
-            print(f"  INBOUND_MESSAGES {r['topic']}: {int(r['n']):,} messages, last loaded {r['last']}")
+            print(f"  INBOUND_MESSAGES {r['topic']}: {int(r['n']):,} messages, last loaded {r['last_loaded']}")
     except pyexasol.ExaQueryError:
-        print("  INBOUND_MESSAGES: not created yet (start scripts/kafka_loader.py)")
+        print("  INBOUND_MESSAGES: not created yet (the service creates it)")
 
 
 def reset(args) -> None:

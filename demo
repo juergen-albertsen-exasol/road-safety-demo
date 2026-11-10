@@ -17,7 +17,9 @@ usage() {
     cat <<'EOF'
 Usage: ./demo <name> [arguments ...]
 
-  service   scripts/road_safety_service.py       load, combine and publish (the partner's service)
+  sidecar   scripts/service_sidecar.py           the service as a sidecar: install, logs [-f], status,
+                                                 disable, enable
+  service   scripts/road_safety_service.py       the service on the laptop instead (development)
   sim       scripts/simulate_road_safety.py      the simulated partners: run, trigger, stop-all, speed,
                                                  scenarios, status, setup, views, reset
   loader    scripts/kafka_loader.py              load the Kafka topics only (the service does this too)
@@ -36,6 +38,7 @@ name="${1:-help}"
 shift || true
 
 case "$name" in
+    sidecar) script="service_sidecar.py" ;;
     service) script="road_safety_service.py" ;;
     sim)     script="simulate_road_safety.py" ;;
     loader)  script="kafka_loader.py" ;;

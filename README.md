@@ -2,7 +2,7 @@
 
 A **reference implementation** for partners of **Data for Road Safety (DFRS)**, the road safety use case of the [Mobility Data Space](docs/context.md), and a live demo of it on a map of Munich.
 
-Carmakers, a navigation service and the road operator send safety events and sensor readings through **Apache Kafka**. **Exasol** loads them, combines reports from independent sources into confirmed warnings with SQL, and publishes those back, within seconds. Everything runs on the partner's own machine, built from **free components**: no central platform, no third-party service, and every message in and out on record in one database.
+Carmakers, a navigation service and the road operator send safety events and sensor readings through **Apache Kafka**. **Exasol** loads them, combines reports from independent sources into confirmed warnings with SQL, and publishes those back, within seconds. Kafka and the service run as sidecars of the database, so one `exasol start` brings up the whole node. Everything runs on the partner's own machine, built from **free components**: no central platform, no third-party service, and every message in and out on record in one database.
 
 Say what happens and where, in plain words: *"an oil spill on the A9 near Freimann, only OEM A sees it"*, *"now a second carmaker reports it"*. Your AI agent starts the simulated event, and the dashboard shows the reports arriving from each provider, the single report staying grey, and the incident being confirmed and published once a second source agrees.
 
@@ -33,7 +33,7 @@ Then say **"Start the simulation"** and open <http://127.0.0.1:5100/apps/munich-
    road operator ───── sensor readings ───►│ (sidecar)           │ parse, combine (SQL)               │
  ./demo sim trigger ...                    │                     ▼                                    │
    "an oil spill here, OEM A sees it"      │ srti.confirmed ◄─ INCIDENTS, OUTBOUND_MESSAGES           │
-                                           │     ▲   ./demo service: load, combine, publish (1.5 s)   │
+                                           │     ▲   service (sidecar): load, combine, publish, 1.5 s │
                                            │     └── Dash Server: the dashboard (read-only)           │
                                            └──────────────────────────────────────────────────────────┘
  open data (OSM, City of Munich, Autobahn, DWD, BASt, Unfallatlas) ──► ROAD_DATA (loaded once)
@@ -45,6 +45,7 @@ Then say **"Start the simulation"** and open <http://127.0.0.1:5100/apps/munich-
 | [Exasol Personal](https://github.com/exasol/exasol-personal) | The database, a local deployment `road-safety-demo` on 127.0.0.1:8563, with its MCP server (port 4896) | Free; launcher MIT |
 | [Apache Kafka](https://kafka.apache.org) 4.4 | The transport, a sidecar of the deployment (127.0.0.1:19092) | Apache 2.0 |
 | [Kafbat UI](https://github.com/kafbat/kafka-ui) | Topics and messages in the browser, a sidecar (<http://127.0.0.1:18080>) | Apache 2.0 |
+| The road safety service | Load, combine, publish: a sidecar `road-safety-service`, its image built locally from `service/Containerfile` (Python, pyexasol, kafka-python) | This repo; PSF, MIT, Apache 2.0 |
 | [Exasol Kafka connector extension](https://github.com/exasol/kafka-connector-extension) | Java UDFs: the database pulls the topics itself | MIT |
 | [Dash Server](https://github.com/exasol-labs/dash-server) | Hosts the dashboard on <http://127.0.0.1:5100>; the agent deploys it over MCP | MIT |
 | [exapump](https://github.com/exasol-labs/exapump) | Loads the open data and runs ad-hoc SQL (profile `road-safety-demo`) | MIT |
@@ -75,18 +76,21 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ./demo sim views
 ./demo access
 
-# 6. Dash Server, cloned next to this repo
+# 6. The service as a sidecar: builds its image in the deployment's container engine, then exasol start
+./demo sidecar install
+
+# 7. Dash Server, cloned next to this repo
 git clone https://github.com/exasol-labs/dash-server ../dash-server
 (cd ../dash-server && python3 -m venv .venv && .venv/bin/pip install -e .)
 ./demo dash                        # keep it running
 
-# 7. Dashboard: ask your agent to "deploy the dashboard" (Dash Server MCP; see AGENTS.md)
+# 8. Dashboard: ask your agent to "deploy the dashboard" (Dash Server MCP; see AGENTS.md)
 ```
 
 ## Run the demo
 
 ```bash
-./demo service                                          # keep it running: load, combine, publish
+./demo sidecar logs -f                                  # the service (a sidecar): one line per published warning
 ./demo sim run --start 07:30 --speed 3 --log events     # keep it running: the partners
 ./demo sim trigger oil_spill --road A9 --near Freimann --providers OEM_A     # one source: stays a single report
 ./demo sim trigger oil_spill --providers OEM_A,OEM_D                         # a second source: confirmed, published
@@ -103,7 +107,8 @@ On stage you don't type these: you tell the agent what happens and where, and it
 | `demo` | Starts the scripts by a short name |
 | `dashboard/` | The Dash app `munich-road-conditions`: `app.py` and its SQL in `queries/` |
 | `roadsafety/` | SQL: `combine.sql` (the rule), `parse.sql`, the schemas, the Kafka connector scripts |
-| `scripts/` | `road_safety_service.py` (the service), `kafka_loader.py`, `setup_kafka.py`, `simulate_road_safety.py` (with `srti_events.py`, `road_scenarios.py`, `road_traffic.py`), `prepare_road_data.py`, `load_road_data.sh`, `setup_access.py`, `build_dashboard_queries.py`, `start_dash_server.sh` |
+| `service/` | `Containerfile`: the service's image for the sidecar |
+| `scripts/` | `road_safety_service.py` (the service), `service_sidecar.py` (builds and runs it as a sidecar), `db.py` (connections), `kafka_loader.py`, `setup_kafka.py`, `simulate_road_safety.py` (with `srti_events.py`, `road_scenarios.py`, `road_traffic.py`), `prepare_road_data.py`, `load_road_data.sh`, `setup_access.py`, `build_dashboard_queries.py`, `start_dash_server.sh` |
 | `data/source/` | Small inputs kept in git: city districts, city roadworks, congestion hotspots |
 | `research/` | The open data sources with licenses and limits; the Munich congestion hotspots |
 | `docs/` | [architecture.md](docs/architecture.md): how it is built and why. [demo-runbook.md](docs/demo-runbook.md): the demo step by step, with commands and talk track. [context.md](docs/context.md): the Mobility Data Space and DFRS. [plan.md](docs/plan.md): the design and how it evolved |

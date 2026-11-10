@@ -15,7 +15,8 @@ needs `exasol stop` and `exasol start`.
     .venv/bin/python scripts/setup_kafka.py [--deployment road-safety-demo] [--no-ui]
 
 Addresses:
-- from the database (Kafka connector UDFs): kafka:9092
+- from the database (Kafka connector UDFs): Kafka's IP on the deployment network, port 9092
+- from other sidecars (the service, Kafbat UI): kafka:9092
 - from the laptop (simulator, loader):      127.0.0.1:19092
 - Kafbat UI:                                http://127.0.0.1:18080
 
@@ -52,6 +53,13 @@ def env(**kv: str) -> str:
 
 # Indented to sit under the top-level `sidecars:` key, like the launcher writes it.
 # The image takes its whole configuration from KAFKA_* variables once any is set.
+# Kafka advertises its own IP on the deployment network, not the name `kafka`: the database's UDFs
+# have no DNS (exasol/exasol-personal#464), and a client follows the advertised address. The IP is
+# known only inside the container, so the command sets it before starting the image's own entrypoint.
+# (`set --` instead of `$(...)`: the launcher expands `$(NAME)` in commands.)
+ADVERTISE = ('set -- `hostname -i`; '
+             'export KAFKA_ADVERTISED_LISTENERS="INTERNAL://$1:9092,EXTERNAL://127.0.0.1:19092"; '
+             'exec /__cacert_entrypoint.sh /etc/kafka/docker/run')
 KAFKA = f"""\
     kafka:
         enabled: true
@@ -59,13 +67,16 @@ KAFKA = f"""\
             name: kafka
             image: {KAFKA_IMAGE}
             imagePullPolicy: IfNotPresent
+            command:
+                - sh
+                - -c
+                - '{ADVERTISE}'
             env:
 {env(CLUSTER_ID="lCta9CuTTLqZ1cPFipnIlw",
      KAFKA_NODE_ID="1",
      KAFKA_PROCESS_ROLES="broker,controller",
      KAFKA_CONTROLLER_QUORUM_VOTERS="1@localhost:9093",
      KAFKA_LISTENERS="INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092,CONTROLLER://localhost:9093",
-     KAFKA_ADVERTISED_LISTENERS="INTERNAL://kafka:9092,EXTERNAL://127.0.0.1:19092",
      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP="INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT",
      KAFKA_CONTROLLER_LISTENER_NAMES="CONTROLLER",
      KAFKA_INTER_BROKER_LISTENER_NAME="INTERNAL",
@@ -149,24 +160,42 @@ def main() -> None:
         print("Kafka setup complete.")
 
 
-def add_sidecars(path: Path, no_ui: bool) -> bool:
+def entry_re(name: str) -> str:
+    """A sidecar entry: from its key to the next key at the same indentation, or the end."""
+    return rf"^    {re.escape(name)}:[ \t]*\n(?:(?!    \S).*\n?)*"
+
+
+def set_sidecars(path: Path, wanted: list[tuple[str, str]], remove: tuple[str, ...] = ()) -> bool:
+    """Make sidecars.yaml hold exactly these entries (added, or replaced when they differ) and none
+    of `remove`. Keeps every other entry. Writes a backup first. Returns whether anything changed."""
     text = path.read_text()
     if not re.search(r"^sidecars:\s*$", text, re.M):
         raise SystemExit(f"{path}: no top-level 'sidecars:' key, edit it by hand")
-    wanted = [("kafka", KAFKA)] + ([] if no_ui else [("kafka-ui", KAFKA_UI)])
-    missing = [(name, block) for name, block in wanted if not re.search(rf"^    {name}:\s*$", text, re.M)]
-    legacy = [name for name in LEGACY if re.search(rf"^    {name}:\s*$", text, re.M)]
-    if not missing and not legacy:
-        print(f"sidecars: {', '.join(n for n, _ in wanted)} already defined")
+    new, changes = text, []
+    for name in remove:
+        if re.search(entry_re(name), new, re.M):
+            new = re.sub(entry_re(name), "", new, flags=re.M)
+            changes.append(f"removed {name}")
+    for name, block in wanted:
+        m = re.search(entry_re(name), new, re.M)
+        if m is None:
+            new = new.rstrip("\n") + "\n" + block
+            changes.append(f"added {name}")
+        elif m.group(0).rstrip("\n") != block.rstrip("\n"):
+            new = new[:m.start()] + block + new[m.end():]
+            changes.append(f"updated {name}")
+    if not changes:
+        print(f"sidecars: {', '.join(n for n, _ in wanted)} up to date")
         return False
     backup = path.with_suffix(f".yaml.bak-{time.strftime('%Y%m%d-%H%M%S')}")
     shutil.copy2(path, backup)
-    for name in legacy:  # an entry runs until the next key at the same indentation, or the end
-        text = re.sub(rf"^    {re.escape(name)}:\s*\n(?:(?!    \S).*\n?)*", "", text, flags=re.M)
-    path.write_text(text.rstrip("\n") + "\n" + "".join(block for _, block in missing))
-    changes = [f"added {n}" for n, _ in missing] + [f"removed {n}" for n in legacy]
+    path.write_text(new)
     print(f"sidecars: {', '.join(changes)} in {path} (backup: {backup.name})")
     return True
+
+
+def add_sidecars(path: Path, no_ui: bool) -> bool:
+    return set_sidecars(path, [("kafka", KAFKA)] + ([] if no_ui else [("kafka-ui", KAFKA_UI)]), LEGACY)
 
 
 def install_jar(bucket: Path) -> None:

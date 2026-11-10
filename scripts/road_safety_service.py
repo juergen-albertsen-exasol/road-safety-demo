@@ -17,14 +17,19 @@ was, and publishes the incidents that are still active again, so subscribers see
     .venv/bin/python scripts/road_safety_service.py --transport direct    # no Kafka: combine and log only
     .venv/bin/python scripts/road_safety_service.py --min-providers 3     # stricter rule
 
-Connects as `sys` to the Exasol Personal deployment; the password is read from the deployment's
-secrets.json and never printed.
+Runs as the sidecar `road-safety-service` of the deployment (scripts/service_sidecar.py, `./demo
+sidecar`), so `exasol start` starts it with the database and Kafka. It can also run on the laptop
+for development, but not while the sidecar runs: both would publish every warning.
+
+The database connection comes from the launcher in the sidecar and from the deployment's
+secrets.json on the laptop (scripts/db.py); the password is never printed.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -37,9 +42,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import pyexasol  # noqa: E402
 
 import srti_events as ev  # noqa: E402
-from simulate_road_safety import connect, insert, wall_now  # noqa: E402
+from db import IN_SIDECAR, KAFKA_BOOTSTRAP, insert, wall_now  # noqa: E402
+import db  # noqa: E402
 
 OUT_TOPIC = "srti.confirmed"
+SIDECAR = "road-safety-service"
+HEARTBEAT = Path(os.environ.get("SERVICE_HEARTBEAT", "/tmp/road-safety-service.alive"))  # the sidecar's readiness probe
 INCIDENT_SCHEMA = "srti-incident/1"
 COMBINE_DEFAULTS = {"min_providers": 2, "sensor_replaces": 1, "window_min": 30, "heading_max": 60,
                     "friction_max": 0.4, "visibility_max": 150, "blockage_after_s": 600, "reach_min": 10}
@@ -96,7 +104,7 @@ def num(v):
 class Service:
     def __init__(self, args):
         self.args = args
-        self.c = connect(args.deployment)
+        self.c = db.connect(args.deployment, dict_rows=True, compression=True)
         for s in statements("service_schema"):
             self.c.execute(s)
         self.seed_offers()
@@ -106,12 +114,11 @@ class Service:
         self.loader = self.producer = None
         if args.transport == "kafka":
             from kafka import KafkaProducer
-            from kafka_loader import Loader, write_hosts_file
-            write_hosts_file(args.deployment)
+            from kafka_loader import Loader
             self.loader = Loader(SimpleNamespace(deployment=args.deployment, parallel=4, prefix=["srti.", "datex."],
                                                  exclude={OUT_TOPIC}, interval=args.interval, once=False,
                                                  verbose=args.verbose))
-            self.producer = KafkaProducer(bootstrap_servers="127.0.0.1:19092", acks=1)
+            self.producer = KafkaProducer(bootstrap_servers=KAFKA_BOOTSTRAP, acks=1)
         self.run_id = None
         self.evidence: dict[str, set] = {}
 
@@ -333,9 +340,25 @@ class Service:
         while True:
             t0 = time.time()
             self.cycle()
+            if IN_SIDECAR:
+                HEARTBEAT.touch()
             if self.args.once:
                 return
             time.sleep(max(0.2, self.args.interval - (time.time() - t0)))
+
+
+def sidecar_enabled(deployment: str) -> bool:
+    """Whether sidecars.yaml has the service and it isn't disabled."""
+    path = db.DEPLOYMENTS / deployment / "sidecars.yaml"
+    lines = path.read_text().splitlines() if path.exists() else []
+    if f"    {SIDECAR}:" not in lines:
+        return False
+    for line in lines[lines.index(f"    {SIDECAR}:") + 1:]:
+        if line.startswith("    ") and not line.startswith("     "):   # the next sidecar
+            break
+        if line.strip() == "enabled: false":
+            return False
+    return True
 
 
 def main() -> None:
@@ -346,7 +369,12 @@ def main() -> None:
     p.add_argument("--min-providers", type=int, default=2, help="different providers needed (default 2)")
     p.add_argument("--once", action="store_true", help="one round, then exit")
     p.add_argument("--verbose", action="store_true", help="also print every Kafka import")
+    p.add_argument("--even-if-sidecar", action="store_true",
+                   help="run on the laptop although the sidecar is enabled (both would publish)")
     args = p.parse_args()
+    if not IN_SIDECAR and not args.even_if_sidecar and sidecar_enabled(args.deployment):
+        sys.exit(f"The service runs as the sidecar {SIDECAR}. Follow it with `./demo sidecar logs`; "
+                 f"to run it here instead, first `./demo sidecar disable`.")
     while True:   # survive `exasol stop`/`start`: wait and reconnect
         try:
             Service(args).run()

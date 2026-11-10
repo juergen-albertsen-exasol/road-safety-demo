@@ -10,22 +10,22 @@ Every command runs from the repo folder. Instead of typing a trigger you can als
 
 ```bash
 exasol status -d road-safety-demo                 # "database_ready"
-exasol sidecar status -d road-safety-demo         # kafka, kafka-ui, mcp: serving
+exasol sidecar status -d road-safety-demo         # kafka, kafka-ui, mcp, road-safety-service: serving
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:5100/apps/munich-road-conditions   # 200
 ```
 
-If the database is stopped: `exasol start -d road-safety-demo` (about 20 s, starts the sidecars too). If Dash Server doesn't answer: `./demo dash` in a terminal of its own.
+If the database is stopped: `exasol start -d road-safety-demo` (about 20 s, starts the sidecars too, the service among them). If Dash Server doesn't answer: `./demo dash` in a terminal of its own.
 
 **2. Open four terminals** (large font, dark background):
 
 | Terminal | Command | Keep it visible? |
 |---|---|---|
-| T1 Service | `./demo service` | Yes: one line per published warning |
+| T1 Service | `./demo sidecar logs -f` (the service runs as a sidecar) | Yes: one line per published warning |
 | T2 Partners | `./demo sim run --start 07:30 --log events` | Yes: every message the partners send, and the incident banners |
 | T3 Triggers | (your commands below) | Yes |
 | T4 SQL | (the queries in step 8) | Only for step 8 |
 
-Start T1 first, then T2. A new simulator run closes everything left from rehearsals; the service clears their incidents.
+T1 only shows the service's output; the service itself runs with the database. A new simulator run closes everything left from rehearsals; the service clears their incidents.
 
 **3. Open three browser tabs:** the deck; the dashboard <http://127.0.0.1:5100/apps/munich-road-conditions> (layers: all on except roadworks and accident history; rule: 2 providers, sensor may replace one); Kafbat UI <http://127.0.0.1:18080> (Topics).
 
@@ -49,7 +49,7 @@ Switch to the terminals and Kafbat UI:
 exasol sidecar status -d road-safety-demo
 ```
 
-> "Kafka runs as a sidecar of the database, on this laptop. Here are the topics: one per partner. And here (T2) are the messages the partners are sending right now: road sensor readings every minute, and now and then a single carmaker reporting something nobody else sees: a false alarm."
+> "Kafka runs as a sidecar of the database, on this laptop, and so does our service: one `exasol start` brings up the whole node. Here are the topics: one per partner. And here (T2) are the messages the partners are sending right now: road sensor readings every minute, and now and then a single carmaker reporting something nobody else sees: a false alarm."
 
 For a technical audience, slides 7–11 go deeper (real and synthetic, the partners, the sensors, the combination rule, the system of record); otherwise skip to the live demo and come back to slides 10–11 when the questions start.
 
@@ -147,8 +147,8 @@ What happens: two carmakers after 5 and 12 s, a wrong-way camera at a ramp when 
 
 | Symptom | Do |
 |---|---|
-| No new dots after a trigger | Is T1 (service) running? Is T2 (simulator) running? The banner says when each provider reports. |
+| No new dots after a trigger | Does `exasol sidecar status -d road-safety-demo` show `road-safety-service` serving? Is T2 (simulator) running? The banner says when each provider reports. |
 | An incident doesn't confirm | Only one provider named? Add a second (`--providers A,B`) or `--sensor`. |
 | Dashboard frozen | Reload the page. The clock under the title says whether the simulation is stopped. |
-| Kafka trouble (no messages in Kafbat UI) | Fallback without Kafka: Ctrl-C T1 and T2, then `./demo service --transport direct` and `./demo sim run --start 07:30 --log events --transport direct`. Everything works, without the Kafka part of the story. |
-| Database stopped | `exasol start -d road-safety-demo`, then restart T2; T1 reconnects by itself. |
+| Kafka trouble (no messages in Kafbat UI) | Fallback without Kafka: `./demo sidecar disable`, Ctrl-C T1 and T2, then `./demo service --transport direct` and `./demo sim run --start 07:30 --log events --transport direct`. Everything works, without the Kafka part of the story. |
+| Database stopped | `exasol start -d road-safety-demo`, then restart T1 and T2; the service comes back with the database. |

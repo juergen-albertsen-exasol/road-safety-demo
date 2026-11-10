@@ -13,35 +13,30 @@ KAFKA_STAGE, which only ever holds the current topic. Kafka keeps nothing across
 differs from the one stored in KAFKA_STAGE.TOPICS, its staging table is emptied, so the import
 starts at 0 again. Everything already loaded is in INBOUND_MESSAGES.
 
-Name resolution. The UDF sandbox has no DNS, so the Java UDFs read `kafka` from a hosts file
-in BucketFS (`jdk.net.hosts.file`). This script writes it with Kafka's current IP on the
-deployment network, at start and whenever an import can't resolve the name.
+Addresses. The UDF sandbox has no DNS (exasol/exasol-personal#464), so the imports name Kafka by
+its IP on the deployment network, looked up again whenever an import fails (the IP changes when
+the sidecar is recreated). Kafka advertises that IP too (scripts/setup_kafka.py). This script
+itself reaches Kafka at KAFKA_BOOTSTRAP: 127.0.0.1:19092 on the laptop, kafka:9092 in a sidecar.
 
-The sys password is read from the deployment's secrets.json and never printed.
+Runs on the laptop or inside the service sidecar; see scripts/db.py for the database connection.
+The password is read, never printed.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import queue
 import re
-import ssl
-import subprocess
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from pathlib import Path
 
 import pyexasol
 from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
 
-BROKER_LAPTOP = "127.0.0.1:19092"
-BROKER_DATABASE = "kafka:9092"
+from db import KAFKA_BOOTSTRAP, connect, kafka_for_udfs
+
 GROUP_ID = "exasol-road-safety"
-DEPLOYMENTS = Path.home() / ".exasol" / "personal" / "deployments"
-HOSTS_FILE_IN_BUCKET = "bucketfs/bfsdefault/default/kafka/hosts"
 
 SETUP_SQL = [
     "CREATE SCHEMA IF NOT EXISTS KAFKA_STAGE",
@@ -57,15 +52,6 @@ SETUP_SQL = [
 ]
 
 
-def connect(deployment: str) -> pyexasol.ExaConnection:
-    secrets = DEPLOYMENTS / deployment / "secrets.json"
-    if not secrets.exists():
-        sys.exit(f"error: {secrets} not found; is the Exasol Personal deployment '{deployment}' installed?")
-    password = json.loads(secrets.read_text())["dbPassword"]
-    return pyexasol.connect(dsn="127.0.0.1:8563", user="sys", password=password, encryption=True,
-                            websocket_sslopt={"cert_reqs": ssl.CERT_NONE}, autocommit=True)
-
-
 def q(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
 
@@ -74,34 +60,15 @@ def stage_table(topic: str) -> str:
     return "KAFKA_STAGE." + re.sub(r"[^A-Z0-9]+", "_", topic.upper()).strip("_")
 
 
-def write_hosts_file(deployment: str) -> str:
-    """Look up Kafka's IP on the deployment network and write the hosts file the Java UDFs read."""
-    dep_id = json.loads((DEPLOYMENTS / deployment / "deployment.json").read_text())["deploymentId"]
-    container = f"exasol-db-{dep_id}-sidecar-kafka"
-    fmt = "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"
-    for engine in ("podman", "docker"):
-        r = subprocess.run(["exasol", "shell", "host", "-d", deployment, "--", engine, "inspect", "-f", fmt, container],
-                           capture_output=True, text=True, timeout=60)
-        ip = r.stdout.strip().splitlines()[-1].strip() if r.stdout.strip() else ""
-        if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", ip):
-            break
-    else:
-        sys.exit(f"error: can't find the IP of {container}; is the kafka sidecar running? "
-                 f"(exasol sidecar status kafka -d {deployment})")
-    path = DEPLOYMENTS / deployment / "local/runtime/exa" / HOSTS_FILE_IN_BUCKET
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{ip} kafka\n")
-    return ip
-
-
 class Loader:
     def __init__(self, args):
         self.args = args
         self.db = connect(args.deployment)
         for sql in SETUP_SQL:
             self.db.execute(sql)
-        self.admin = KafkaAdminClient(bootstrap_servers=BROKER_LAPTOP, client_id="road-safety-loader")
-        self.consumer = KafkaConsumer(bootstrap_servers=BROKER_LAPTOP, enable_auto_commit=False)
+        self.broker_udf = kafka_for_udfs(args.deployment)
+        self.admin = KafkaAdminClient(bootstrap_servers=KAFKA_BOOTSTRAP, client_id="road-safety-loader")
+        self.consumer = KafkaConsumer(bootstrap_servers=KAFKA_BOOTSTRAP, enable_auto_commit=False)
         self.pool = ThreadPoolExecutor(max_workers=args.parallel)
         self.conns: queue.Queue = queue.Queue()     # each import borrows one: a connection serves one thread at a time
         for _ in range(args.parallel):
@@ -161,7 +128,7 @@ class Loader:
         table = stage_table(topic)
         t0 = time.time()
         conn.execute(f"""IMPORT INTO {table} FROM SCRIPT KAFKA_EXTENSION.KAFKA_CONSUMER WITH
-            BOOTSTRAP_SERVERS = {q(BROKER_DATABASE)} TOPIC_NAME = {q(topic)} TABLE_NAME = {q(table)}
+            BOOTSTRAP_SERVERS = {q(self.broker_udf)} TOPIC_NAME = {q(topic)} TABLE_NAME = {q(table)}
             GROUP_ID = {q(GROUP_ID)} RECORD_VALUE_FORMAT = 'string' RECORD_FIELDS = 'value,timestamp'
             POLL_TIMEOUT_MS = '1000' CONSUME_ALL_OFFSETS = 'true'""")
         return topic, time.time() - t0
@@ -189,20 +156,22 @@ class Loader:
         if not todo:
             return
         futures = [self.pool.submit(self.import_topic, t) for t in todo]
+        failed = False
         for f in futures:
             try:
                 topic, secs = f.result()
             except pyexasol.ExaQueryError as e:
-                msg = getattr(e, "message", "") or str(e)
-                if "resolvable" in msg or "UnknownHost" in msg:
-                    ip = write_hosts_file(self.args.deployment)
-                    print(f"{now()} kafka not resolvable in the UDFs, hosts file rewritten ({ip})", flush=True)
-                else:
-                    print(f"{now()} import failed: {one_line(msg)}", flush=True)
+                print(f"{now()} import failed: {one_line(getattr(e, 'message', '') or str(e))}", flush=True)
+                failed = True
                 continue
             n = self.copy(topic, topics[topic])
             if getattr(self.args, "verbose", True):
                 print(f"{now()} {topic}: +{n} messages ({secs:.1f} s)", flush=True)
+        if failed:                         # Kafka may have a new IP after a restart of its sidecar
+            ip = kafka_for_udfs(self.args.deployment)
+            if ip != self.broker_udf:
+                print(f"{now()} kafka moved to {ip} (was {self.broker_udf})", flush=True)
+                self.broker_udf = ip
 
     def run(self) -> None:
         while True:
@@ -233,13 +202,11 @@ def main() -> None:
     args.prefix = args.prefix or ["srti.", "datex."]
     args.exclude = set(args.exclude) | {"srti.confirmed"}  # our own outbound topic
     print(f"{now()} loading topics {', '.join(a + '*' for a in args.prefix)} every {args.interval:g} s", flush=True)
-    # Survive `exasol stop`/`start`: on any failure wait, look up Kafka's IP again (it can change
-    # when the sidecar is recreated) and reconnect to both.
+    # Survive `exasol stop`/`start`: on any failure wait and reconnect to both.
     while True:
         try:
-            ip = write_hosts_file(args.deployment)
             loader = Loader(args)
-            print(f"{now()} connected (kafka at {ip} for the UDFs)", flush=True)
+            print(f"{now()} connected (kafka at {loader.broker_udf} for the UDFs)", flush=True)
             loader.run()
             return
         except KeyboardInterrupt:

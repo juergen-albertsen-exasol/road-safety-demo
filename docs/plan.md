@@ -106,6 +106,7 @@ A scheduled step (every few seconds, run by the loader or a Lua script) turns th
 - **Measured:** 2 to 4 s from send to row in Exasol with Apache Kafka (3 to 5 s with Redpanda) (`POLL_TIMEOUT_MS = 1000`, `CONSUME_ALL_OFFSETS = true`).
 - **The connector resumes per table, not per topic:** it reads `MAX(KAFKA_OFFSET)` per partition from the table named in `TABLE_NAME`. So each topic gets its own staging table in `KAFKA_STAGE` (only the last row per partition is kept); after each import the new rows are copied into `ROAD_SAFETY.INBOUND_MESSAGES`. Topic names stay plain (`srti.oem-a`); a run id in the name, as planned first, would not have helped.
 - **The UDF sandbox has no DNS** (empty `resolv.conf` and `hosts`), so `kafka` doesn't resolve in a UDF, while the IP works. The Java scripts read a hosts file from BucketFS (`%jvmoption -Djdk.net.hosts.file=/buckets/bfsdefault/default/kafka/hosts`); the loader writes it with the broker's current IP (`podman inspect` in the VM through `exasol shell host`) at start and after an outage. The broker keeps advertising `kafka:9092`. The IP does change: it moved from 10.89.0.6 to 10.89.0.3 in the restart test. Cause: the official script language containers ship empty `etc/resolv.conf` and `etc/hosts`, while the working configuration sits unused at `/conf` in the sandbox (its resolver, Podman's `10.89.0.1`, does know `kafka`). Reported as [exasol/exasol-personal#464](https://github.com/exasol/exasol-personal/issues/464); once fixed, the hosts file and the `%jvmoption` can go.
+  *Update 2026-11-10:* the hosts file is gone. With the service as a sidecar, nothing could write it (a sidecar has no access to BucketFS). Instead Kafka advertises its own IP on the deployment network (a `command` in its sidecar entry sets `KAFKA_ADVERTISED_LISTENERS` from `hostname -i` before the image's entrypoint), and the loader passes that IP as the bootstrap server: from DNS inside the sidecar, from `podman inspect` on the laptop. The `%jvmoption` is removed from the scripts.
 
 ### Persistence: sidecars keep nothing, Exasol keeps everything
 
@@ -172,7 +173,7 @@ Checked on 2026-11-09:
 
 - **Kafka connector license:** MIT. Release 2.0.1 of 26 Oct 2026, actively maintained.
 - **Offsets in the Kafka connector:** read from the target table (`KAFKA_PARTITION`, `KAFKA_OFFSET`) across all topics in it; no reset option. Solved with a staging table per topic and the topic id (see "Kafka").
-- **Does the connector run on Exasol Personal?** Yes, with the Java script language container and a hosts file for the name `kafka` (see "Kafka").
+- **Does the connector run on Exasol Personal?** Yes, with the Java script language container, and Kafka named by its IP (see "Kafka").
 - **Latency of loading:** 2 to 4 s from send to row. What remains is the event delays per provider and the combination step (step 5).
 - **Redpanda's license:** would have been fine for partners, but Redpanda was replaced by Apache Kafka for the sovereignty message (see "Kafka"). No license question left for the broker.
 - **EDC state (iteration 2):** in memory by default; SQL stores are PostgreSQL only. See "Connector".

@@ -35,9 +35,11 @@ Everything inside the box is what a partner runs; everything outside is what the
 | **Apache Kafka 4.4** | Transport between the partners and the service. KRaft mode, one node | Sidecar of the deployment; `127.0.0.1:19092` from the laptop, `kafka:9092` from the database |
 | **Kafbat UI** | Shows the topics and messages ("proof that it's Kafka") | Sidecar, <http://127.0.0.1:18080> |
 | **Exasol Kafka connector extension** | Java UDFs: the database pulls the messages from Kafka itself | Schema `KAFKA_EXTENSION`, JAR in BucketFS |
-| **The road safety service** | Every 1.5 s: load, parse, combine, keep incidents, publish | `scripts/road_safety_service.py` |
+| **The road safety service** | Every 1.5 s: load, parse, combine, keep incidents, publish | Sidecar `road-safety-service`: `scripts/road_safety_service.py` in an image built locally from `service/Containerfile` (`./demo sidecar install`) |
 | **Dash Server** | Hosts the dashboard | <http://127.0.0.1:5100/apps/munich-road-conditions> |
 | **The simulator** | Plays the other partners: events, sensor readings, false alarms; triggers on request | `scripts/simulate_road_safety.py` (outside the box on purpose) |
+
+**One start for the whole node.** Kafka, Kafbat UI, the MCP server and the service are sidecars of the deployment: `exasol start` brings them up with the database, `exasol stop` takes them down. The service's image is built in the deployment's own container engine (on macOS, in the database VM) from `service/Containerfile` and never leaves it; its tag is a hash of the code, so `./demo sidecar install` after a change builds a new image and `exasol start` replaces the container. The container gets the database connection from the launcher (`secretKeyRef` to `exasol-database`): no password in a file or an argument. It reaches Kafka at `kafka:9092` on the deployment network, and the launcher checks it with a readiness probe (a heartbeat file the service touches every round). For development the service still runs on the laptop (`./demo service`), but not while the sidecar is enabled: both would publish every warning.
 
 ## Free components, and what "sovereign" means here
 
@@ -82,7 +84,7 @@ Everything inside the box is what a partner runs; everything outside is what the
 
 ## Restarts: Kafka keeps nothing, Exasol keeps everything
 
-Sidecars have no volumes, so after `exasol stop`/`start` the topics are empty and get new topic ids. The connector resumes from the highest offset in its target table, so each topic has its own staging table, emptied when the topic id changes. Tested with a producer running through a restart: every Kafka position loaded exactly once, the loader followed Kafka to its new IP. After a restart the service publishes the still active incidents again. Not covered: messages Kafka acknowledged in the last seconds before the stop and nobody loaded yet (4 of 69 in one test); stop the producers first for a clean stop.
+Sidecars have no volumes, so after `exasol stop`/`start` the topics are empty and get new topic ids. The connector resumes from the highest offset in its target table, so each topic has its own staging table, emptied when the topic id changes. Tested with a producer running through a restart: every Kafka position loaded exactly once, the loader followed Kafka to its new IP. After a restart the service sidecar comes back with the others, waits for the database and Kafka, and publishes the still active incidents again. Not covered: messages Kafka acknowledged in the last seconds before the stop and nobody loaded yet (4 of 69 in one test); stop the producers first for a clean stop.
 
 ## Measured on a laptop (macOS, Apple silicon, Exasol Personal VM with 24 GB and 2 CPUs)
 
@@ -97,11 +99,10 @@ Sidecars have no volumes, so after `exasol stop`/`start` the topics are empty an
 
 ## Known limits and open points
 
-- **Exasol Personal on a laptop has no DNS in the UDF sandbox**, so the Java UDFs read the name `kafka` from a hosts file in BucketFS that the loader keeps current. Reported as [exasol/exasol-personal#464](https://github.com/exasol/exasol-personal/issues/464); once fixed, the workaround goes.
+- **Exasol Personal on a laptop has no DNS in the UDF sandbox**, so the imports name Kafka by its IP on the deployment network, and Kafka advertises that IP instead of its name (a `command` in its sidecar entry sets it at start). Reported as [exasol/exasol-personal#464](https://github.com/exasol/exasol-personal/issues/464); once fixed, the workaround goes.
 - **No connector, no enforced usage policy yet** (iteration 2): `DATA_OFFERS` and `CONTRACTS` are metadata shown on the dashboard.
 - **The event format is provisional:** modelled on DATEX II SRTI until a real DFRS sample is available.
 - **Clearing by absence** (providers passing the spot without reporting it) isn't built: an incident clears when its reports are withdrawn or expire.
-- **The service runs as a Python process**, not yet as a sidecar of the deployment; making it one would put the whole node under `exasol start`.
 - **The rules are ours**, not the official DFRS logic, and the partners, their events and the sensor readings are synthetic.
 
 ## Iterations
