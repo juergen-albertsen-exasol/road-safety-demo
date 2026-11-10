@@ -46,7 +46,7 @@ without one: for the running scenario of that type):
 A trigger writes one row into SCENARIO_LOG and prints a SIMULATION banner. The running simulator
 picks it up within one tick. It never writes a hazard or an incident.
 
-Connects as `sys` to the Exasol Personal deployment (--deployment, default road-safety-demo); the
+Connects as `sys` to the Exasol Personal deployment (--deployment, default `default`); the
 password is read from the deployment's secrets.json and never printed. Writes to ROAD_SAFETY, and
 with --transport kafka to the Kafka sidecar (127.0.0.1:19092).
 """
@@ -339,7 +339,7 @@ class Publisher:
                 self.producer = KafkaProducer(bootstrap_servers=KAFKA, linger_ms=20, acks=1)
             except Exception as e:  # noqa: BLE001
                 sys.exit(f"error: Kafka not reachable at {KAFKA} ({type(e).__name__}). Is the kafka sidecar running? "
-                         "(exasol sidecar status kafka -d road-safety-demo), or use --transport direct")
+                         "(exasol sidecar status kafka), or use --transport direct")
         else:
             sys.path.insert(0, str(ROOT / "scripts"))
             from kafka_loader import SETUP_SQL
@@ -1060,7 +1060,7 @@ def reset(args) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--deployment", default="road-safety-demo", help="Exasol Personal deployment name")
+    ap.add_argument("--deployment", default=db.DEPLOYMENT, help="Exasol Personal deployment name (default: default)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("setup", help="create ROAD_SAFETY with providers and sensors")
     p = sub.add_parser("run", help="run the partners: SRTI events, sensor readings, false alarms")

@@ -1,5 +1,5 @@
 -- Exasol Kafka connector extension (MIT, github.com/exasol/kafka-connector-extension), version 2.0.1.
--- Needs the JAVA script language container (`exasol slc install java -d road-safety-demo`, then a
+-- Needs the JAVA script language container (`exasol slc install java`, then a
 -- restart) and the JAR in BucketFS. Local deployments have no BucketFS HTTP access: the JAR is
 -- copied into the deployment directory, see scripts/setup_kafka.py.
 --

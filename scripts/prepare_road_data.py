@@ -7,7 +7,7 @@ Sources, licenses and limits: research/road-data-sources.md. The design: docs/pl
     .venv/bin/python scripts/prepare_road_data.py
     scripts/load_road_data.sh
 
-The database is an Exasol Personal deployment (`exasol install local -d road-safety-demo`), loaded with
+The database is an Exasol Personal deployment (`exasol install local`), loaded with
 exapump; `road-safety-demo` is the exapump profile for it.
 
 The study area is the city of Munich (union of the 25 districts in data/source/districts.csv)

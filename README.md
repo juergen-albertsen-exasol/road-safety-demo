@@ -42,7 +42,7 @@ Then say **"Start the simulation"** and open <http://127.0.0.1:5100/apps/munich-
 
 | Component | What it is | License |
 |---|---|---|
-| [Exasol Personal](https://github.com/exasol/exasol-personal) | The database, a local deployment `road-safety-demo` on 127.0.0.1:8563, with its MCP server (port 4896) | Free; launcher MIT |
+| [Exasol Personal](https://github.com/exasol/exasol-personal) | The database, a local deployment `default` on 127.0.0.1:8563, with its MCP server (port 4896) | Free; launcher MIT |
 | [Apache Kafka](https://kafka.apache.org) 4.4 | The transport, a sidecar of the deployment (127.0.0.1:19092) | Apache 2.0 |
 | [Kafbat UI](https://github.com/kafbat/kafka-ui) | Topics and messages in the browser, a sidecar (<http://127.0.0.1:18080>) | Apache 2.0 |
 | The road safety service | Load, combine, publish: a sidecar `road-safety-service`, its image built locally from `service/Containerfile` (Python, pyexasol, kafka-python) | This repo; PSF, MIT, Apache 2.0 |
@@ -57,8 +57,8 @@ The same steps your agent runs, from the repo folder. `./demo <name>` starts a s
 
 ```bash
 # 1. Database: install the Exasol Personal launcher (https://github.com/exasol/exasol-personal), then
-exasol install local -d road-safety-demo
-exasol mcp enable -d road-safety-demo
+exasol install local
+exasol mcp enable
 
 # 2. Python and exapump (https://github.com/exasol-labs/exapump)
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt

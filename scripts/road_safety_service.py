@@ -363,7 +363,7 @@ def sidecar_enabled(deployment: str) -> bool:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--deployment", default="road-safety-demo")
+    p.add_argument("--deployment", default=db.DEPLOYMENT)
     p.add_argument("--transport", choices=["kafka", "direct"], default="kafka")
     p.add_argument("--interval", type=float, default=1.5, help="seconds between rounds (default 1.5)")
     p.add_argument("--min-providers", type=int, default=2, help="different providers needed (default 2)")

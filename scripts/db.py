@@ -30,6 +30,8 @@ import pyexasol
 
 BERLIN = ZoneInfo("Europe/Berlin")
 DEPLOYMENTS = Path.home() / ".exasol" / "personal" / "deployments"
+# The Exasol Personal deployment: the launcher's default one, unless EXASOL_DEPLOYMENT names another
+DEPLOYMENT = os.environ.get("EXASOL_DEPLOYMENT", "default")
 IN_SIDECAR = bool(os.environ.get("EXASOL_DB_HOST"))
 KAFKA_BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "127.0.0.1:19092")
 KAFKA_INTERNAL_PORT = 9092

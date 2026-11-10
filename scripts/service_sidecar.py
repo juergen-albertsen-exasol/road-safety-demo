@@ -27,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import db  # noqa: E402
 from db import DEPLOYMENTS, container_name  # noqa: E402
 from setup_kafka import set_sidecars  # noqa: E402
 
@@ -144,7 +145,7 @@ def logs(args) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--deployment", default="road-safety-demo")
+    p.add_argument("--deployment", default=db.DEPLOYMENT)
     sub = p.add_subparsers(dest="cmd", required=True)
     i = sub.add_parser("install", help="build the image, add the sidecar, exasol start")
     i.add_argument("--min-providers", type=int, help="different providers needed (service default 2)")

@@ -34,6 +34,7 @@ from datetime import datetime
 import pyexasol
 from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
 
+import db
 from db import KAFKA_BOOTSTRAP, connect, kafka_for_udfs
 
 GROUP_ID = "exasol-road-safety"
@@ -192,7 +193,7 @@ def now() -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--deployment", default="road-safety-demo")
+    p.add_argument("--deployment", default=db.DEPLOYMENT)
     p.add_argument("--interval", type=float, default=3.0, help="seconds between import rounds (default 3)")
     p.add_argument("--parallel", type=int, default=4, help="topics imported at the same time (default 4)")
     p.add_argument("--prefix", action="append", help="topic prefixes to load (default: srti. and datex.)")

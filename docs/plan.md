@@ -97,7 +97,7 @@ A scheduled step (every few seconds, run by the loader or a Lua script) turns th
 - **Apache Kafka 4.4** (`docker.io/apache/kafka:4.4.0`, the official JVM image) in KRaft mode: one container that is broker and controller, no ZooKeeper, heap capped at 512 MB. Apache 2.0, governed by the Apache Software Foundation, sends nothing home. Configured entirely through `KAFKA_*` variables in the sidecar definition (listeners, single-node replication factors, a fixed `CLUSTER_ID`). Not the `apache/kafka-native` image: faster, but Apache calls it experimental and not for production.
 - **Kafbat UI** (`docker.io/kafbat/kafka-ui:v1.5.0`, Apache 2.0) as a second sidecar on `http://127.0.0.1:18080`: shows the topics and the messages arriving. Useful on stage ("here is what the carmakers send").
 - **Why not Redpanda,** which step 2 used first: the sovereignty message. Redpanda is source-available under the Business Source License of one US vendor, and its default configuration reports cluster metadata to the vendor (`enable_metrics_reporter = true`, to `m.rp.vectorized.io`). Its advantages (no JVM, fast start, small) turned out small next to KRaft-mode Kafka. Kafka uses a bit more memory, see below.
-- Added as user entries `kafka` and `kafka-ui` in the deployment's `sidecars.yaml` by `scripts/setup_kafka.py`. This is documented and supported in the launcher (`user-docs/content/sidecars.md` in exasol-personal): saved definitions are authoritative, user-added entries count as enabled, `exasol start -d road-safety-demo` starts them, `exasol sidecar status kafka` reports them. `exasol sidecar enable` only accepts catalog names, so setup edits the file instead.
+- Added as user entries `kafka` and `kafka-ui` in the deployment's `sidecars.yaml` by `scripts/setup_kafka.py`. This is documented and supported in the launcher (`user-docs/content/sidecars.md` in exasol-personal): saved definitions are authoritative, user-added entries count as enabled, `exasol start` starts them, `exasol sidecar status kafka` reports them. `exasol sidecar enable` only accepts catalog names, so setup edits the file instead.
 - Networking: the database reaches the broker as `kafka:9092` inside the deployment network; the simulator and loader on the laptop use the published port `127.0.0.1:19092`. Two listeners (`INTERNAL`, `EXTERNAL`), each advertised with its own address, plus the controller on `localhost:9093` inside the container. Readiness: a `tcpSocket` probe on the published port.
 - On macOS the sidecars run in the database VM and take memory from it. Measured on 2026-11-09 in a VM with 24 GB and 2 CPUs: Kafka about 370 MB, Kafbat UI about 310 MB (Redpanda was about 290 MB, its Console about 50 MB). `exasol start` with both sidecars, database already stopped: 18 s.
 - Images from `docker.io/...`. A partner who takes sovereignty seriously mirrors them into a registry of their own.
@@ -450,11 +450,11 @@ The thresholds are parameters (pyexasol placeholders), so they can be changed on
 
 The demo runs on Exasol Personal, exapump and Dash Server:
 
-- Database: the named Exasol Personal deployment `road-safety-demo` (`exasol status -d road-safety-demo`, local preset, 127.0.0.1:8563, user `sys`). Start and stop with `exasol start|stop -d road-safety-demo`.
+- Database: the named Exasol Personal deployment `default` (`exasol status`, local preset, 127.0.0.1:8563, user `sys`). Start and stop with `exasol start|stop`.
 - SQL and loading: exapump with the profile `road-safety-demo` (`exapump sql -p road-safety-demo "..."`, `exapump upload`).
 - Python: the project `.venv` (`requirements.txt`: osmium, shapely, pyexasol).
 - Dashboard: [Dash Server](https://github.com/exasol-labs/dash-server) (http://127.0.0.1:5100), with an Exasol profile `road-safety-demo`: user `dash_readonly`, `SELECT` on `ROAD_DATA` and `ROAD_SAFETY` only (writes are refused, tested). Password in `secrets/dash_readonly_password` and in Dash Server's secret store (see `secrets/README.md`).
-- Agent SQL: the deployment's MCP server (`exasol mcp enable -d road-safety-demo`, http://127.0.0.1:4896/mcp), registered in Claude Code as `exasol-personal`. It offers only read tools (no write query), but logs in as `sys`, the only user in the database.
+- Agent SQL: the deployment's MCP server (`exasol mcp enable`, http://127.0.0.1:4896/mcp), registered in Claude Code as `exasol-personal`. It offers only read tools (no write query), but logs in as `sys`, the only user in the database.
 
 ## Decisions
 

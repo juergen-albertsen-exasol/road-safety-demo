@@ -31,7 +31,7 @@ Everything inside the box is what a partner runs; everything outside is what the
 
 | Part | What it does | Where |
 |---|---|---|
-| **Exasol Personal** | The database: system of record, all logic in SQL | Local deployment `road-safety-demo` (a VM on macOS), or the partner's cloud account |
+| **Exasol Personal** | The database: system of record, all logic in SQL | Local deployment `default` (a VM on macOS), or the partner's cloud account |
 | **Apache Kafka 4.4** | Transport between the partners and the service. KRaft mode, one node | Sidecar of the deployment; `127.0.0.1:19092` from the laptop, `kafka:9092` from the database |
 | **Kafbat UI** | Shows the topics and messages ("proof that it's Kafka") | Sidecar, <http://127.0.0.1:18080> |
 | **Exasol Kafka connector extension** | Java UDFs: the database pulls the messages from Kafka itself | Schema `KAFKA_EXTENSION`, JAR in BucketFS |

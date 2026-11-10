@@ -87,7 +87,7 @@ def dash_user(password_sys: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--deployment", default="road-safety-demo", help="Exasol Personal deployment name")
+    ap.add_argument("--deployment", default=os.environ.get("EXASOL_DEPLOYMENT", "default"), help="Exasol Personal deployment name")
     ap.add_argument("--profile", default="road-safety-demo", help="exapump profile name")
     args = ap.parse_args()
     pw = sys_password(args.deployment)

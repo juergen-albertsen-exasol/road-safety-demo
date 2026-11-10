@@ -12,7 +12,7 @@ Every step is skipped when it's already done. Afterwards it says whether a start
 needed: changed sidecars need `exasol start` (the database keeps running), a new Java container
 needs `exasol stop` and `exasol start`.
 
-    .venv/bin/python scripts/setup_kafka.py [--deployment road-safety-demo] [--no-ui]
+    .venv/bin/python scripts/setup_kafka.py [--deployment default] [--no-ui]
 
 Addresses:
 - from the database (Kafka connector UDFs): Kafka's IP on the deployment network, port 9092
@@ -27,6 +27,7 @@ docs/plan.md, revision 2026-11-09).
 
 import argparse
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -141,7 +142,7 @@ KAFKA_UI = f"""\
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--deployment", default="road-safety-demo")
+    parser.add_argument("--deployment", default=os.environ.get("EXASOL_DEPLOYMENT", "default"))
     parser.add_argument("--no-ui", action="store_true", help="skip Kafbat UI")
     args = parser.parse_args()
 
