@@ -1,0 +1,75 @@
+# Build the demo's container images for linux/amd64 and linux/arm64 and publish them to the GitHub
+# Container Registry: ghcr.io/exasol-labs/road-safety-demo/{road-safety,dash-server}:<version>.
+# Runs for a version tag (v1.2.3, the version in VERSION) or by hand. setup.sh uses the tag in VERSION.
+name: images
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository }}
+  # Dash Server is built from this commit of https://github.com/exasol-labs/dash-server
+  # (v0.2.1 plus its container image). Keep in sync with DASH_SERVER_REF in scripts/lib.sh.
+  DASH_SERVER_REF: c6e9f91d5a315fc04c53b8389891821890af1d79
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: v
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "tag $GITHUB_REF_NAME doesn't match VERSION ($version)" >&2; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: road-safety
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: containers/road-safety/Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/road-safety:${{ steps.v.outputs.version }}
+
+      - name: Dash Server source
+        run: |
+          mkdir -p build/dash-server-src
+          curl -fsSL "https://github.com/exasol-labs/dash-server/archive/$DASH_SERVER_REF.tar.gz" \
+            | tar -xzf - -C build/dash-server-src --strip-components 1
+
+      - name: dash-server base (exasol-labs/dash-server)
+        uses: docker/build-push-action@v6
+        with:
+          context: build/dash-server-src
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/dash-server-base:${{ env.DASH_SERVER_REF }}
+
+      - name: dash-server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: containers/dash-server/Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: DASH_SERVER_IMAGE=${{ env.REGISTRY }}/dash-server-base:${{ env.DASH_SERVER_REF }}
+          tags: ${{ env.REGISTRY }}/dash-server:${{ steps.v.outputs.version }}

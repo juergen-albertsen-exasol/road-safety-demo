@@ -26,7 +26,12 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import pyexasol
+# pyexasol 3 reports every connect to Exasol's telemetry endpoint unless this is set (any value).
+# The demo sends nothing home; it must be set before the first connect.
+os.environ.setdefault("EXASOL_TELEMETRY_DISABLE", "1")
+
+import pyexasol  # noqa: E402
+from pyexasol.data_types import convert_websocket_to_python  # noqa: E402
 
 BERLIN = ZoneInfo("Europe/Berlin")
 DEPLOYMENTS = Path.home() / ".exasol" / "personal" / "deployments"
@@ -46,7 +51,7 @@ def connect(deployment: str, dict_rows: bool = False, compression: bool = False)
         if not secrets.exists():
             sys.exit(f"error: {secrets} not found; is the Exasol Personal deployment '{deployment}' installed?")
         dsn, user, password = "127.0.0.1:8563", "sys", json.loads(secrets.read_text())["dbPassword"]
-    opts = {"fetch_dict": True, "fetch_mapper": pyexasol.exasol_mapper} if dict_rows else {}
+    opts = {"fetch_dict": True, "fetch_mapper": convert_websocket_to_python} if dict_rows else {}
     return pyexasol.connect(dsn=dsn, user=user, password=password, encryption=True,
                             websocket_sslopt={"cert_reqs": ssl.CERT_NONE}, compression=compression,
                             autocommit=True, **opts)

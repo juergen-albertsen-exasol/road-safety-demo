@@ -1,7 +1,9 @@
-# Python for the data preparation, the simulator, the Kafka client and the setup scripts (project .venv).
-# The dashboard's own requirements are in dashboard/requirements.txt; Dash Server installs them.
+# Python for maintainers only (project .venv, Python 3.10-3.14; see docs/maintainers.md): preparing and
+# exporting the data set, running scripts on the laptop. Users need none of it: the demo runs in containers
+# (containers/road-safety/Containerfile pins the same packages). Dashboard packages: dashboard/requirements.txt.
 kafka-python==3.0.13
 numpy==2.5.4
 osmium==4.3.2
-pyexasol==1.3.0
+pyarrow==26.0.1
+pyexasol==3.0.1
 shapely==2.2.0

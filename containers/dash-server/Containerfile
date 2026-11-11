@@ -1,0 +1,37 @@
+# Dash Server for the road safety demo: runs as the sidecar `dash-server` of the Exasol Personal
+# deployment, on http://127.0.0.1:5100, with its MCP control plane on /mcp.
+#
+# Base: the container image of Dash Server (https://github.com/exasol-labs/dash-server, MIT), built
+# from its Dockerfile at a pinned commit (see DASH_SERVER_REF in .github/workflows/images.yml and
+# scripts/build_images.sh). This layer adds the prebuilt dashboard v2 (dashboard/) and start.sh,
+# which on every start
+#   1. gives the read-only database user DASH_READONLY a new random password (no password is stored),
+#   2. starts Dash Server with an Exasol profile `road-safety-demo` for that user,
+#   3. deploys dashboard v2 `munich-road-conditions` once the demo's tables exist.
+# Sidecars keep no files, so Dash Server starts empty after every `exasol stop`; step 3 brings v2 back.
+ARG DASH_SERVER_IMAGE=localhost/dash-server-base:latest
+FROM ${DASH_SERVER_IMAGE}
+
+COPY --chown=dash:dash dashboard/ /opt/road-safety/dashboard/
+COPY --chown=dash:dash --chmod=0755 containers/dash-server/start.sh containers/dash-server/bootstrap.py /opt/road-safety/
+COPY VERSION /opt/road-safety/
+
+LABEL org.opencontainers.image.source="https://github.com/exasol-labs/road-safety-demo" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.description="Dash Server with the road safety demo's dashboard"
+
+# Local, single-user settings beside the database: apps run in the server's process with its packages
+# (dash, plotly, pyexasol), so no per-app environment is built and the settings below reach them.
+# EXASOL_TELEMETRY_DISABLE: pyexasol 3 would otherwise report every connect to Exasol.
+ENV DASH_SERVER_APP_RUNTIME_MODE=in_process \
+    DASH_SERVER_APP_DEPENDENCY_ISOLATION=shared \
+    DASH_SERVER_DEMO_APP_ENABLED=false \
+    DASH_SERVER_EXASOL_PROFILE_NAME=road-safety-demo \
+    DASH_SERVER_EXASOL_USER=DASH_READONLY \
+    DASH_SERVER_EXASOL_TLS_VERIFY=false \
+    DASH_SERVER_EXASOL_PROFILE_CREATION_ENABLED=false \
+    DASH_SERVER_EXASOL_OVERWRITE=true \
+    EXASOL_TELEMETRY_DISABLE=1 \
+    TZ=Europe/Berlin
+
+ENTRYPOINT ["/opt/road-safety/start.sh"]

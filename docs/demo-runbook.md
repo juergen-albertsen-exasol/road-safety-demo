@@ -21,11 +21,11 @@ The live part, step by step: what to type, what appears, and a few points to rem
 
 ```bash
 exasol status                                     # "database_ready"
-exasol sidecar status                             # kafka, kafka-ui, mcp, road-safety-service: serving
+exasol sidecar status                             # kafka, kafka-ui, mcp, road-safety-service, dash-server: serving
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:5100/apps/munich-road-conditions   # 200
 ```
 
-Database stopped: `exasol start` (about 20 s, starts the sidecars and the service too). Dash Server doesn't answer: `./demo dash` in a terminal of its own.
+Database stopped: `exasol start` (about 20 s, starts the sidecars, the service and Dash Server too; dashboard v2 is back about 30 s later). Something missing: `./setup.sh` repairs it.
 
 **2. Open the windows** (large font, dark background):
 
@@ -36,9 +36,11 @@ Database stopped: `exasol start` (about 20 s, starts the sidecars and the servic
 | Agent | Claude Code (or your agent) in the repo folder |
 | Browser | Kafbat UI <http://127.0.0.1:18080>; dashboard v2 <http://127.0.0.1:5100/apps/munich-road-conditions> (layers: all on except roadworks and accident history); v1 opens in step 6 |
 
-Optional: a terminal with `./demo sidecar logs -f` (the service: one line per published warning).
+Optional: a terminal with `./demo logs service -f` (the service: one line per published warning).
 
-**3. Rehearse once, then reset.** Run steps 2–9, then tell the agent *"reset the demo after the rehearsal"*: it deletes the v1 app (after you confirm) so it can be built live again, and withdraws the events. Stop the simulation in T2 (Ctrl-C). Starting it again on stage begins a clean run.
+While T2 runs the simulation (or T1 an `exasol connect` session), the launcher's `exasol start`, `stop` and `sidecar` commands wait for its lock; `./demo` commands and the agent's triggers work.
+
+**3. Rehearse once, then reset.** Run steps 2–9, then tell the agent *"reset the demo after the rehearsal"*: it deletes the v1 app (after you confirm) so it can be built live again, and withdraws the events. Stop the simulation in T2 (Ctrl-C, or `./demo sim stop`). Starting it again on stage begins a clean run.
 
 ## Live
 
@@ -49,7 +51,7 @@ exasol status
 exasol sidecar status
 ```
 
-- Database plus four sidecars: `kafka`, `kafka-ui`, `mcp`, `road-safety-service`
+- Database plus six sidecars: `kafka`, `kafka-ui`, `mcp`, `road-safety-service`, `road-safety-tools`, `dash-server`
 - One `exasol start` for all of it; nothing in a cloud
 - The service is a container too: load, combine, publish every 1.5 s
 
@@ -137,9 +139,9 @@ Agent, for example:
 
 Agent:
 
-> *Build a simple dashboard, v1, that shows the road events coming in live from the partners.*
+> *Build a simple dashboard, v1, that shows the road events coming in live from the partners. Use the prepared version.*
 
-The agent creates `munich-road-events` on Dash Server (about 30 seconds) and explains it. Open <http://127.0.0.1:5100/apps/munich-road-events>.
+The agent creates `munich-road-events` on Dash Server from `dashboard-v1/` (about 30 seconds) and explains it. Without *"use the prepared version"* it designs one of its own, as in the README's exercise: that takes a few minutes. Open <http://127.0.0.1:5100/apps/munich-road-events>.
 
 - Three SQL files and a page of Python
 - Dash Server validates, builds, tests the SQL, serves it
@@ -221,12 +223,12 @@ The dashboard adds up to 2–3 s, the agent 10–20 s for announcing and startin
 | Symptom | Do |
 |---|---|
 | No new dots after a trigger | T2 (simulation) running? `exasol sidecar status`: `road-safety-service` serving? The banner says when each carmaker reports. |
-| The accident doesn't confirm | Banner: two or more carmakers named? `./demo sidecar logs` shows what the service published. |
+| The accident doesn't confirm | Banner: two or more carmakers named? `./demo logs service` shows what the service published. |
 | v1 can't be created: the app exists | Left from a rehearsal: let the agent replace it, or open it as it is. |
 | v1 shows an error | Reload. If it persists, the agent reads `app_tail_logs`. |
 | Dashboard frozen | Reload. The clock under the title says whether the simulation is stopped. |
-| Kafka trouble (no messages arrive) | Fallback without Kafka: `./demo sidecar disable`, then `./demo service --transport direct` in T1 and `./demo sim run --start 07:30 --log events --transport direct` in T2. Afterwards `./demo sidecar enable`. |
-| Database stopped | `exasol start` (starts the service too), then restart T2. |
+| Kafka trouble (no messages arrive) | `./demo logs service` and `./demo logs kafka` say why; `exasol start` restarts what isn't running. |
+| Database stopped | `exasol start` (starts the service and Dash Server too), then restart T2. |
 
 ## Optional extras
 

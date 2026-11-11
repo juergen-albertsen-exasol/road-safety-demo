@@ -1,0 +1,34 @@
+# The road safety demo's own image: the service, the simulated partners and the setup tools.
+# Runs as two sidecars of the Exasol Personal deployment (see setup.sh):
+#   road-safety-service  the service: load the Kafka topics, combine, publish (the default command)
+#   road-safety-tools    idle (`sleep infinity`); ./demo runs the simulator, the data load and the
+#                        database setup in it with `podman exec`
+# Built from the repo root:  podman build -f containers/road-safety/Containerfile .
+# Published as ghcr.io/exasol-labs/road-safety-demo/road-safety:<VERSION> by .github/workflows/images.yml.
+#
+# Python 3.13 (PSF License) on Debian; pyexasol (MIT), kafka-python (Apache 2.0), shapely (BSD),
+# numpy (BSD), pyarrow (Apache 2.0). pyexasol 3 needs Python < 3.15. The code and SQL are this repo's.
+FROM docker.io/library/python:3.13.18-slim-bookworm
+
+RUN pip install --no-cache-dir --disable-pip-version-check --root-user-action=ignore \
+        pyexasol==3.0.1 kafka-python==3.0.13 shapely==2.2.0 numpy==2.5.4 pyarrow==26.0.1 \
+    && useradd --uid 10001 --no-create-home --home-dir /app demo
+
+WORKDIR /app
+COPY scripts/ scripts/
+COPY roadsafety/ roadsafety/
+COPY VERSION ./
+
+LABEL org.opencontainers.image.source="https://github.com/exasol-labs/road-safety-demo" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.description="Road safety demo on Exasol: service, simulated partners, setup tools"
+
+# EXASOL_TELEMETRY_DISABLE: pyexasol 3 would otherwise report every connect to Exasol; the demo sends nothing home.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    KAFKA_BOOTSTRAP=kafka:9092 \
+    TZ=Europe/Berlin \
+    EXASOL_TELEMETRY_DISABLE=1
+USER demo
+ENTRYPOINT ["python"]
+CMD ["scripts/road_safety_service.py"]

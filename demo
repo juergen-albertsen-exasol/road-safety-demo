@@ -1,62 +1,94 @@
 #!/usr/bin/env bash
-# Start one of the demo's scripts by a short name; everything after the name is passed on.
+# The demo's commands. Everything runs in the deployment's sidecars; nothing but the Exasol
+# Personal launcher is needed on this machine.
 #
-#   ./demo <name> [arguments ...]
-#   ./demo sim run --start 07:30 --speed 3 --log events
+#   ./demo sim run --start 07:30 --log events
 #   ./demo sim trigger oil_spill --road A9 --near Freimann --providers OEM_A
-#   ./demo service
+#   ./demo logs service -f
 #   ./demo help
-#
-# Python scripts run with the project's virtual environment (.venv), from the repo folder.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PY="$ROOT/.venv/bin/python"
+# shellcheck source=scripts/lib.sh
+source "$ROOT/scripts/lib.sh"
 
 usage() {
     cat <<'EOF'
-Usage: ./demo <name> [arguments ...]
+Usage: ./demo <command> [arguments ...]
 
-  sidecar   scripts/service_sidecar.py           the service as a sidecar: install, logs [-f], status,
-                                                 disable, enable
-  service   scripts/road_safety_service.py       the service on the laptop instead (development)
-  sim       scripts/simulate_road_safety.py      the simulated partners: run, trigger, stop-all, speed,
-                                                 scenarios, status, setup, views, reset
-  loader    scripts/kafka_loader.py              load the Kafka topics only (the service does this too)
-  kafka     scripts/setup_kafka.py               set up the Kafka sidecars and the connector
-  access    scripts/setup_access.py              exapump profile and the dashboard's read-only user
-  prepare   scripts/prepare_road_data.py         download and prepare the open data
-  load      scripts/load_road_data.sh            load the open data into ROAD_DATA
-  queries   scripts/build_dashboard_queries.py   regenerate the dashboard's combination query
-  dash      scripts/start_dash_server.sh         start Dash Server
+  sim <...>          the simulated partners (simulate_road_safety.py in the road-safety-tools sidecar):
+                       run [--start 07:30] [--speed 3] [--log events]   keep it running; Ctrl-C stops it
+                       trigger <event> --road <road> --near <place> [--direction ...] [--providers ...]
+                       trigger <event> --stop | stop-all | status | scenarios | speed <factor>
+  logs <sidecar> [-f] [--tail N]
+                     what a sidecar prints: service (one line per published warning), dash, tools,
+                     kafka, kafka-ui, mcp
+  status             the database, the sidecars and the simulation
+  sql                an SQL session on the database (exasol connect)
+  setup              ./setup.sh: set up or repair everything
 
-Arguments after the name go to the script; `./demo <name> --help` shows its options.
+For maintainers (need the Python environment .venv, see docs/maintainers.md):
+  build-images       build the two images locally, tagged as the published ones
+  export-data        package ROAD_DATA as dist/munich-road-data.zip (the release asset)
+  prepare            download and prepare the open data from its sources (about 600 MB)
+  queries            regenerate the dashboard's combination query from roadsafety/combine.sql
+
+`./demo sim --help` and `./demo sim <command> --help` show the simulator's options.
 EOF
+}
+
+sidecar_name() {
+    case "$1" in
+        service) echo road-safety-service ;;
+        tools|sim) echo road-safety-tools ;;
+        dash) echo dash-server ;;
+        *) echo "$1" ;;
+    esac
+}
+
+dev_python() {
+    [[ -x "$ROOT/.venv/bin/python" ]] || die "no Python environment in .venv (maintainers only):
+       python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+    cd "$ROOT" && exec "$ROOT/.venv/bin/python" "$@"
 }
 
 name="${1:-help}"
 shift || true
 
 case "$name" in
-    sidecar) script="service_sidecar.py" ;;
-    service) script="road_safety_service.py" ;;
-    sim)     script="simulate_road_safety.py" ;;
-    loader)  script="kafka_loader.py" ;;
-    kafka)   script="setup_kafka.py" ;;
-    access)  script="setup_access.py" ;;
-    prepare) script="prepare_road_data.py" ;;
-    queries) script="build_dashboard_queries.py" ;;
-    load)    cd "$ROOT" && exec "$ROOT/scripts/load_road_data.sh" "$@" ;;
-    dash)    cd "$ROOT" && exec "$ROOT/scripts/start_dash_server.sh" "$@" ;;
-    help|-h|--help) usage; exit 0 ;;
-    *) echo "unknown name: $name" >&2; usage >&2; exit 2 ;;
+    sim)
+        tools scripts/simulate_road_safety.py "$@" ;;
+    logs)
+        [[ $# -ge 1 ]] || die "which sidecar? ./demo logs service|dash|tools|kafka|kafka-ui|mcp [-f]"
+        ctr="$(container "$(sidecar_name "$1")")"; shift
+        args=(--tail 50)
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -f|--follow) args+=(-f) ;;
+                --tail) args=(--tail "$2"); shift ;;
+                *) die "unknown option for logs: $1" ;;
+            esac
+            shift
+        done
+        engine_tty logs "${args[@]}" "$ctr" || true ;;
+    status)
+        exa status
+        exa sidecar status
+        tools scripts/simulate_road_safety.py status ;;
+    sql)
+        exec exasol connect -d "$DEPLOYMENT" "$@" ;;
+    setup)
+        exec "$ROOT/setup.sh" "$@" ;;
+    build-images)
+        exec "$ROOT/scripts/build_images.sh" "$@" ;;
+    export-data)
+        dev_python scripts/export_dataset.py "$@" ;;
+    prepare)
+        dev_python scripts/prepare_road_data.py "$@" ;;
+    queries)
+        dev_python scripts/build_dashboard_queries.py "$@" ;;
+    help|-h|--help)
+        usage ;;
+    *)
+        echo "unknown command: $name" >&2; usage >&2; exit 2 ;;
 esac
-
-if [[ ! -x "$PY" ]]; then
-    echo "No virtual environment in $ROOT/.venv. Create it first:" >&2
-    echo "  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
-    exit 1
-fi
-
-cd "$ROOT"
-exec "$PY" "$ROOT/scripts/$script" "$@"

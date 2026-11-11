@@ -11,10 +11,10 @@ provider (srti.oem-a ... srti.oem-f, srti.nav). The road operator publishes its 
 alerts from its sensors, to datex.road-operator. scripts/kafka_loader.py loads all of it into
 ROAD_SAFETY.INBOUND_MESSAGES; combining the events into confirmed warnings is up to the SQL.
 
-    .venv/bin/python scripts/simulate_road_safety.py setup            # schema, providers, sensors
-    .venv/bin/python scripts/simulate_road_safety.py run              # the partners, Ctrl-C to stop
-    .venv/bin/python scripts/simulate_road_safety.py status
-    .venv/bin/python scripts/simulate_road_safety.py reset --yes      # empty the scenario and state tables
+    ./demo sim setup            # schema, providers, sensors
+    ./demo sim run              # the partners, Ctrl-C to stop
+    ./demo sim status
+    ./demo sim reset --yes      # empty the scenario and state tables
 
 `run` options: --speed (simulation seconds per wall second, default 1), --seed, --weather-day
 (default 2026-10-27), --start (local time, default 06:00), --tick (wall seconds per batch, default 1),
@@ -32,12 +32,12 @@ each false alarm out of the grouping radius of the active false alarms and trigg
 
 Scenarios are injected on purpose and visibly, while `run` is running:
 
-    .venv/bin/python scripts/simulate_road_safety.py scenarios                       # what can be triggered
-    .venv/bin/python scripts/simulate_road_safety.py trigger oil_spill --road "Fürstenrieder Straße" --near "Laimer Platz"
-    .venv/bin/python scripts/simulate_road_safety.py trigger wrong_way_driver --road A9 --direction south --near Garching-Süd
-    .venv/bin/python scripts/simulate_road_safety.py trigger fog --near Aubing
-    .venv/bin/python scripts/simulate_road_safety.py trigger slippery_road --stop
-    .venv/bin/python scripts/simulate_road_safety.py stop-all
+    ./demo sim scenarios                       # what can be triggered
+    ./demo sim trigger oil_spill --road "Fürstenrieder Straße" --near "Laimer Platz"
+    ./demo sim trigger wrong_way_driver --road A9 --direction south --near Garching-Süd
+    ./demo sim trigger fog --near Aubing
+    ./demo sim trigger slippery_road --stop
+    ./demo sim stop-all
 
 Steering who reports, to show the combination rule at work (with a place: for the new scenario;
 without one: for the running scenario of that type):
@@ -52,7 +52,7 @@ picks it up within one tick. It never writes a hazard or an incident.
 
 Connects as `sys` to the Exasol Personal deployment (--deployment, default `default`); the
 password is read from the deployment's secrets.json and never printed. Writes to ROAD_SAFETY, and
-with --transport kafka to the Kafka sidecar (127.0.0.1:19092).
+with --transport kafka to the Kafka sidecar (kafka:9092 from the road-safety-tools sidecar).
 """
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ import srti_events as ev
 ROOT = Path(__file__).resolve().parent.parent
 BERLIN = ZoneInfo("Europe/Berlin")
 STATION = 3379
-KAFKA = "127.0.0.1:19092"
+KAFKA = db.KAFKA_BOOTSTRAP   # kafka:9092 in a sidecar, 127.0.0.1:19092 on the laptop
 
 PROVIDERS = [  # id, name, kind, dynamics, environment, fleet share %, topic
     ("OEM_A", "OEM A", "oem", True, True, 24.0),
@@ -924,7 +924,7 @@ def run(args) -> None:
 def current_run(c) -> dict:
     row = c.execute("SELECT * FROM ROAD_SAFETY.SIM_STATE WHERE \"status\" = 'running' ORDER BY \"run_id\" DESC LIMIT 1").fetchone()
     if not row:
-        sys.exit("error: no simulator is running. Start it first: simulate_road_safety.py run")
+        sys.exit("error: no simulator is running. Start it first: ./demo sim run")
     return row
 
 
@@ -1070,7 +1070,7 @@ def trigger(args) -> None:
             f"  {describe_steering(args.scenario, steering)}",
             f"  injects: {info['injects']}",
             "  The partners send events and sensor readings only. No hazard is written: confirming it is up to the SQL.",
-            f"  stop it with: simulate_road_safety.py trigger {args.scenario} --stop"])
+            f"  stop it with: ./demo sim trigger {args.scenario} --stop"])
 
 
 def set_speed(args) -> None:
@@ -1138,6 +1138,33 @@ def reset(args) -> None:
     print("ROAD_SAFETY scenario and state tables emptied (providers, sensors and INBOUND_MESSAGES kept)")
 
 
+def stop_run(args) -> None:
+    """Send SIGTERM to every `run` of this script in this container (or on this machine) and wait.
+    Needed in the road-safety-tools sidecar: closing the terminal or killing `./demo sim run` on the
+    laptop doesn't always reach the process in the container."""
+    me = os.getpid()
+    pids = []
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            cmd = (proc / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if int(proc.name) != me and any(c.endswith(b"simulate_road_safety.py") for c in cmd) and b"run" in cmd:
+            pids.append(int(proc.name))
+    if not pids:
+        print("no simulator is running here")
+        return
+    for pid in pids:
+        os.kill(pid, signal.SIGTERM)
+    deadline = time.time() + 20
+    while time.time() < deadline and any(Path(f"/proc/{pid}").exists() for pid in pids):
+        time.sleep(0.5)
+    left = [pid for pid in pids if Path(f"/proc/{pid}").exists()]
+    if left:
+        sys.exit(f"the simulator (pid {', '.join(map(str, left))}) didn't stop within 20 s")
+    print(f"simulator stopped (pid {', '.join(map(str, pids))})")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--deployment", default=db.DEPLOYMENT, help="Exasol Personal deployment name (default: default)")
@@ -1179,6 +1206,7 @@ def main() -> int:
     p.add_argument("--stop", action="store_true", help="end the active scenario of this type")
     p.add_argument("--by", default="presenter", help="who triggered it (written to SCENARIO_LOG)")
     sub.add_parser("stop-all", help="end all active scenarios")
+    sub.add_parser("stop", help="stop a running simulator in this container (as Ctrl-C in its terminal would)")
     p = sub.add_parser("speed", help="change the simulation speed while it runs")
     p.add_argument("factor", type=float, help="simulated seconds per real second, e.g. 20 for the build-up, 1 for incidents")
     sub.add_parser("scenarios", help="list the scenarios that can be triggered, and who reports them")
@@ -1186,7 +1214,8 @@ def main() -> int:
     p.add_argument("--yes", action="store_true")
     args = ap.parse_args()
     {"setup": setup, "run": run, "views": views, "status": status, "reset": reset,
-     "trigger": trigger, "stop-all": stop_all, "scenarios": scenarios, "speed": set_speed}[args.cmd](args)
+     "trigger": trigger, "stop-all": stop_all, "stop": stop_run, "scenarios": scenarios,
+     "speed": set_speed}[args.cmd](args)
     return 0
 
 

@@ -17,8 +17,8 @@ was, and publishes the incidents that are still active again, so subscribers see
     .venv/bin/python scripts/road_safety_service.py --transport direct    # no Kafka: combine and log only
     .venv/bin/python scripts/road_safety_service.py --min-providers 3     # stricter rule
 
-Runs as the sidecar `road-safety-service` of the deployment (scripts/service_sidecar.py, `./demo
-sidecar`), so `exasol start` starts it with the database and Kafka. It can also run on the laptop
+Runs as the sidecar `road-safety-service` of the deployment (set up by setup.sh, image
+containers/road-safety), so `exasol start` starts it with the database and Kafka. It can also run on the laptop
 for development, but not while the sidecar runs: both would publish every warning.
 
 The database connection comes from the launcher in the sidecar and from the deployment's
@@ -373,8 +373,8 @@ def main() -> None:
                    help="run on the laptop although the sidecar is enabled (both would publish)")
     args = p.parse_args()
     if not IN_SIDECAR and not args.even_if_sidecar and sidecar_enabled(args.deployment):
-        sys.exit(f"The service runs as the sidecar {SIDECAR}. Follow it with `./demo sidecar logs`; "
-                 f"to run it here instead, first `./demo sidecar disable`.")
+        sys.exit(f"The service runs as the sidecar {SIDECAR}. Follow it with `./demo logs service -f`; "
+                 f"to run it here instead, first `exasol sidecar disable {SIDECAR}`.")
     while True:   # survive `exasol stop`/`start`: wait and reconnect
         try:
             Service(args).run()

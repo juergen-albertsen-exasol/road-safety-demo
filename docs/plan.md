@@ -4,6 +4,17 @@ This is the working plan the demo was built from, kept as its design record. How
 
 Status: first version built (sections 1-8); revised on 2026-11-06 and 2026-11-07, see the next sections. Where the revisions and the sections below differ, the revisions apply. The revision of 2026-11-09 is in progress: steps 2 to 7 done.
 
+## Revision 2026-11-11: shareable, with Exasol Personal as the only requirement
+
+**Status: built and tested on a fresh deployment** (macOS, Apple silicon). After the talk the repo is prepared for others to run:
+
+- **Only the Exasol Personal launcher.** `./setup.sh` (bash and curl) installs or starts the deployment, enables MCP, installs Java and the Kafka connector, writes the sidecars into `sidecars.yaml` and loads the data. Python, exapump and the starter kit are no longer needed by users; `.venv` is for maintainers ([maintainers.md](maintainers.md)).
+- **Everything in sidecars, images on ghcr.io.** `road-safety-service` and `road-safety-tools` share the image `road-safety` (the tools sidecar idles; `./demo sim ...` runs the simulator in it with `podman exec` through `exasol shell host`). `dash-server` is Dash Server built from exasol-labs/dash-server at a pinned commit, with dashboard v2 baked in: on every start it gives `DASH_READONLY` a new random password, creates the profile from the environment and deploys v2 once the tables exist. Built for amd64 and arm64 by `.github/workflows/images.yml`.
+- **The data as a release asset.** `munich-road-data.zip`: 15 Parquet files (17.5 MB instead of about 600 MB of source downloads), `schema.sql`, `manifest.json` with row counts, `LICENSE.txt`. Loaded in about 4 s; checked against the original row by row (only floating-point noise in the 17th digit differs).
+- **Dashboard v1 is an exercise** in the README; `dashboard-v1/` is the reference solution.
+- **Known limits:** sidecars keep no files, so dashboards built over MCP are gone after `exasol stop` (v2 comes back by itself). While `exasol shell host` runs (`./demo sim run`), the launcher's `start`, `stop` and `sidecar` commands wait for its lock; other `exasol shell host` calls (triggers) work. Linux is untested.
+- **pyexasol 3.0.1** (Python ≤ 3.14): fixes the version-string bug of 1.3.0 (reported as exasol/pyexasol#470, then closed: already fixed); its telemetry is switched off everywhere.
+
 ## Revision 2026-11-09: a reference implementation for DFRS partners
 
 **Status: built** (2026-11-09): steps 2 to 7. The demo runs end to end: partners send SRTI events through Kafka, `scripts/road_safety_service.py` loads, combines and publishes them, the dashboard shows it; README, `docs/architecture.md` and the deck explain it. Open: a real DFRS sample (step 1) and clearing by absence.
@@ -424,6 +435,7 @@ The thresholds are parameters (pyexasol placeholders), so they can be changed on
    - Extra table `SIM_STATE`: one row per run with the simulation time, so the dashboard knows "now".
    - Test run of 10 minutes at x10: 234 hard brakings, 49 ESC, 40 ABS, 39 hazard lights, and no false black-ice alarm under the rule in section 4.
    - pyexasol's bulk import fails on the version string of Exasol Personal (`2026.2.0-nano.8`), so the simulator writes with multi-row INSERTs (3,000 rows in 0.2 s).
+     *Update 2026-11-11:* that was pyexasol 1.3.0, which passes the version to `packaging.version.Version`. pyexasol 3.x parses it (`database_versions.parse`); the repo now pins 3.0.1 (Python 3.10–3.14), with its telemetry switched off (`EXASOL_TELEMETRY_DISABLE`). The INSERTs stay: fast enough, and nothing measured yet favours `import_from_iterable`. Reported as exasol/pyexasol#470 before we noticed the fix, then closed.
 4. Detection view and reach query, tested with SQL. Done 2026-11-06:
    - `roadsafety/hazards.sql` and `roadsafety/reach.sql` are templates with pyexasol placeholders (`{window_min!d}`, `{min_vehicles!d}`, `{min_providers!d}`, `{friction_max!f}`, `{blockage_after_s!d}`, `{reach_m!d}`, `{toward_deg!d}`). `simulate_road_safety.py views` renders them with the defaults into `V_HAZARDS_LIVE` and `V_HAZARD_REACH`; the dashboard runs the templates with its own values.
    - One generic rule table: per hazard type the evidence kinds, radius, window, minimum vehicles/providers/signals, whether a sensor can stand in for vehicles, a required kind (airbag for accidents) and the expiry. Hazards are grouped per ~450 m grid cell, the wrong-way driver per vehicle.

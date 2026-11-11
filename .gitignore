@@ -11,3 +11,5 @@ data/*
 # secrets: never commit passwords or keys
 secrets/*
 !secrets/README.md
+# release assets built by scripts/export_dataset.py
+dist/
