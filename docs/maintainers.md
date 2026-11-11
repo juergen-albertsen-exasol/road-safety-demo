@@ -26,8 +26,8 @@ The zip holds one Parquet file per table, `schema.sql` (the exact column types),
 
 | Image | Source | Content |
 |---|---|---|
-| `ghcr.io/exasol-labs/road-safety-demo/road-safety:<VERSION>` | `containers/road-safety/Containerfile` | `scripts/`, `roadsafety/`, Python 3.13 with pyexasol, kafka-python, shapely, numpy, pyarrow. Runs the service (default command) and, as `road-safety-tools`, idles for `./demo` |
-| `ghcr.io/exasol-labs/road-safety-demo/dash-server:<VERSION>` | `containers/dash-server/Containerfile` | Dash Server built from [exasol-labs/dash-server](https://github.com/exasol-labs/dash-server) at `DASH_SERVER_REF` (`scripts/lib.sh` and the workflow), plus `dashboard/` and `start.sh` / `bootstrap.py`: the read-only user's password, the Exasol profile `road-safety-demo`, dashboard v2 deployed on every start |
+| `ghcr.io/juergen-albertsen-exasol/road-safety-demo/road-safety:<VERSION>` | `containers/road-safety/Containerfile` | `scripts/`, `roadsafety/`, Python 3.13 with pyexasol, kafka-python, shapely, numpy, pyarrow. Runs the service (default command) and, as `road-safety-tools`, idles for `./demo` |
+| `ghcr.io/juergen-albertsen-exasol/road-safety-demo/dash-server:<VERSION>` | `containers/dash-server/Containerfile` | Dash Server built from [exasol-labs/dash-server](https://github.com/exasol-labs/dash-server) at `DASH_SERVER_REF` (`scripts/lib.sh` and the workflow), plus `dashboard/` and `start.sh` / `bootstrap.py`: the read-only user's password, the Exasol profile `road-safety-demo`, dashboard v2 deployed on every start |
 
 Build and try them locally, in the deployment's container engine (the VM on macOS), with the published tags. The sidecars use `imagePullPolicy: IfNotPresent`, so local images take the place of the published ones:
 

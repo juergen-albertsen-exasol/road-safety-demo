@@ -4,7 +4,7 @@
 #   road-safety-tools    idle (`sleep infinity`); ./demo runs the simulator, the data load and the
 #                        database setup in it with `podman exec`
 # Built from the repo root:  podman build -f containers/road-safety/Containerfile .
-# Published as ghcr.io/exasol-labs/road-safety-demo/road-safety:<VERSION> by .github/workflows/images.yml.
+# Published as ghcr.io/juergen-albertsen-exasol/road-safety-demo/road-safety:<VERSION> by .github/workflows/images.yml.
 #
 # Python 3.13 (PSF License) on Debian; pyexasol (MIT), kafka-python (Apache 2.0), shapely (BSD),
 # numpy (BSD), pyarrow (Apache 2.0). pyexasol 3 needs Python < 3.15. The code and SQL are this repo's.
@@ -19,7 +19,7 @@ COPY scripts/ scripts/
 COPY roadsafety/ roadsafety/
 COPY VERSION ./
 
-LABEL org.opencontainers.image.source="https://github.com/exasol-labs/road-safety-demo" \
+LABEL org.opencontainers.image.source="https://github.com/juergen-albertsen-exasol/road-safety-demo" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.description="Road safety demo on Exasol: service, simulated partners, setup tools"
 

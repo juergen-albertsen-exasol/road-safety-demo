@@ -15,7 +15,7 @@ You need **[Exasol Personal](https://github.com/exasol/exasol-personal)** on mac
    ```
 2. **Get this repo and run the setup.** It installs the database if you don't have one yet (several minutes, the first time), adds the sidecars, and loads the open data (17 MB):
    ```bash
-   git clone https://github.com/exasol-labs/road-safety-demo.git
+   git clone https://github.com/juergen-albertsen-exasol/road-safety-demo.git
    cd road-safety-demo
    ./setup.sh
    ```
@@ -143,9 +143,9 @@ While `./demo sim run` or `./demo sql` runs, the launcher's own `exasol start`, 
 | `mcp` | The database's MCP server: read-only SQL for your agent, <http://127.0.0.1:4896/mcp> | `docker.io/exasol/mcp-server` (Exasol Personal catalog) | MIT |
 | `kafka` | [Apache Kafka](https://kafka.apache.org) 4.4, the transport, 127.0.0.1:19092 | `docker.io/apache/kafka` | Apache 2.0 |
 | `kafka-ui` | [Kafbat UI](https://github.com/kafbat/kafka-ui): topics and messages, <http://127.0.0.1:18080> | `docker.io/kafbat/kafka-ui` | Apache 2.0 |
-| `road-safety-service` | Loads the topics, combines the reports in SQL, publishes warnings | `ghcr.io/exasol-labs/road-safety-demo/road-safety` | MIT |
-| `road-safety-tools` | The same image, idle: `./demo` runs the simulator and the setup steps in it | `ghcr.io/exasol-labs/road-safety-demo/road-safety` | MIT |
-| `dash-server` | [Dash Server](https://github.com/exasol-labs/dash-server) with dashboard v2, <http://127.0.0.1:5100>, MCP on `/mcp` | `ghcr.io/exasol-labs/road-safety-demo/dash-server` | MIT |
+| `road-safety-service` | Loads the topics, combines the reports in SQL, publishes warnings | `ghcr.io/juergen-albertsen-exasol/road-safety-demo/road-safety` | MIT |
+| `road-safety-tools` | The same image, idle: `./demo` runs the simulator and the setup steps in it | `ghcr.io/juergen-albertsen-exasol/road-safety-demo/road-safety` | MIT |
+| `dash-server` | [Dash Server](https://github.com/exasol-labs/dash-server) with dashboard v2, <http://127.0.0.1:5100>, MCP on `/mcp` | `ghcr.io/juergen-albertsen-exasol/road-safety-demo/dash-server` | MIT |
 
 The database pulls the topics itself through the [Exasol Kafka connector](https://github.com/exasol/kafka-connector-extension) (Java UDFs, MIT). Every container gets its database connection from the launcher; no password is written anywhere. Dash Server reads the database as `DASH_READONLY`, a user with `SELECT` on `ROAD_DATA` and `ROAD_SAFETY` only, which gets a new random password on every start. Nothing is sent home: the images switch off pyexasol's telemetry.
 
@@ -174,6 +174,6 @@ How it is built, what we measured and what's still open: [docs/architecture.md](
 
 ## Data and licenses
 
-The code is MIT licensed ([LICENSE](LICENSE)). The data set [`munich-road-data.zip`](https://github.com/exasol-labs/road-safety-demo/releases) is derived from open data under its own licenses: road network © OpenStreetMap contributors (ODbL 1.0; the derived tables are shared under the ODbL). City districts and roadworks: Landeshauptstadt München (dl-de/by-2.0). Motorway events © Die Autobahn GmbH des Bundes (GeoNutzV). Weather: Deutscher Wetterdienst (CC BY 4.0). Traffic counts: Bundesanstalt für Straßenwesen (CC BY 4.0). Accident atlas: Statistische Ämter des Bundes und der Länder (dl-de/by-2.0). Details per dataset in [research/road-data-sources.md](research/road-data-sources.md) and in the zip's `LICENSE.txt`.
+The code is MIT licensed ([LICENSE](LICENSE)). The data set [`munich-road-data.zip`](https://github.com/juergen-albertsen-exasol/road-safety-demo/releases) is derived from open data under its own licenses: road network © OpenStreetMap contributors (ODbL 1.0; the derived tables are shared under the ODbL). City districts and roadworks: Landeshauptstadt München (dl-de/by-2.0). Motorway events © Die Autobahn GmbH des Bundes (GeoNutzV). Weather: Deutscher Wetterdienst (CC BY 4.0). Traffic counts: Bundesanstalt für Straßenwesen (CC BY 4.0). Accident atlas: Statistische Ämter des Bundes und der Länder (dl-de/by-2.0). Details per dataset in [research/road-data-sources.md](research/road-data-sources.md) and in the zip's `LICENSE.txt`.
 
 The carmakers, providers, their events and the sensor readings are fictional. No real vehicle or DFRS data is used.

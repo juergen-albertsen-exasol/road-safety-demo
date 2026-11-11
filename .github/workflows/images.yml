@@ -1,5 +1,5 @@
 # Build the demo's container images for linux/amd64 and linux/arm64 and publish them to the GitHub
-# Container Registry: ghcr.io/exasol-labs/road-safety-demo/{road-safety,dash-server}:<version>.
+# Container Registry: ghcr.io/juergen-albertsen-exasol/road-safety-demo/{road-safety,dash-server}:<version>.
 # Runs for a version tag (v1.2.3, the version in VERSION) or by hand. setup.sh uses the tag in VERSION.
 name: images
 

@@ -31,7 +31,7 @@ SCHEMA = "ROAD_DATA"
 NAME = "munich-road-data"
 
 LICENSE_TEXT = """\
-Munich road data for the road safety demo (https://github.com/exasol-labs/road-safety-demo)
+Munich road data for the road safety demo (https://github.com/juergen-albertsen-exasol/road-safety-demo)
 
 This data set is derived from open data. Each table's source, license and attribution are listed in
 the table ROAD_DATA_SOURCES (road_data_sources.parquet) and below.

@@ -4,13 +4,13 @@
 
 ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
-REGISTRY="${ROAD_SAFETY_REGISTRY:-ghcr.io/exasol-labs/road-safety-demo}"
+REGISTRY="${ROAD_SAFETY_REGISTRY:-ghcr.io/juergen-albertsen-exasol/road-safety-demo}"
 IMAGE_ROAD_SAFETY="$REGISTRY/road-safety:$VERSION"
 IMAGE_DASH_SERVER="$REGISTRY/dash-server:$VERSION"
 # Dash Server is built from this commit of https://github.com/exasol-labs/dash-server (v0.2.1 plus its
 # container image, branch feat/sidecar-container-image). Keep in sync with .github/workflows/images.yml.
 DASH_SERVER_REF="c6e9f91d5a315fc04c53b8389891821890af1d79"
-DATASET_URL="${ROAD_SAFETY_DATASET_URL:-https://github.com/exasol-labs/road-safety-demo/releases/download/v$VERSION/munich-road-data.zip}"
+DATASET_URL="${ROAD_SAFETY_DATASET_URL:-https://github.com/juergen-albertsen-exasol/road-safety-demo/releases/download/v$VERSION/munich-road-data.zip}"
 
 # The launcher's installer puts `exasol` into ~/.local/bin, which may not be on the PATH yet.
 if ! command -v exasol >/dev/null && [[ -x "$HOME/.local/bin/exasol" ]]; then
