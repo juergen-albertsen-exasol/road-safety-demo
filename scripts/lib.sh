@@ -36,7 +36,9 @@ die()  { printf '%serror:%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
 quiet() { grep -v -e '^Using ' -e '"level":"INFO"' -e 'is already ready to accept connections' -e 'instance IP, DNS name may have changed' >&2; }
 exa() { exasol "$@" -d "$DEPLOYMENT" 2> >(quiet); }
 
-on_vm() { [[ -d "$VM_SHARE" ]]; }
+# The database runs in a VM only on macOS. Launcher 2.4.0 creates vm-shared on Linux too, where
+# `exasol shell host` isn't supported, so the directory alone doesn't tell.
+on_vm() { [[ "$(uname -s)" == Darwin && -d "$VM_SHARE" ]]; }
 
 # A command of the container engine that runs the deployment's containers: podman in the database
 # VM on macOS, the local podman (or docker) on Linux.
